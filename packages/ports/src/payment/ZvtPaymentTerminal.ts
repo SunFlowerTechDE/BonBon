@@ -24,6 +24,7 @@ import {
   CURRENCY_EUR,
   DEFAULT_PASSWORD,
   ECR_COMMAND,
+  SERVICE_BYTE_STATUS_ONLY,
   PT_COMMAND,
   RESULT_CODE,
   intermediateText,
@@ -134,6 +135,52 @@ export class ZvtPaymentTerminal implements PaymentPort {
       ...encodeBcd(Number.parseInt(receiptNumber, 10), 2),
     ])
     return this.runDialogue(ECR_COMMAND.reversal, daten, 'Storno', {
+      expectStatusInformation: true,
+    })
+  }
+
+  /**
+   * Fragt nach dem zuletzt ausgefuehrten Vorgang — `06 20` Repeat Receipt.
+   *
+   * ## Warum dieser Befehl und nicht ein anderer
+   *
+   * Die Spezifikation nennt ihn ausdruecklich fuer diesen Zweck (2.20.2):
+   *
+   *   "Depending on the service-byte the PT sends the Status-Information of
+   *    the last transaction executed. This ensures that the ECR can
+   *    resynchronise in case of an inconclusive ending of a transaction."
+   *
+   * Die Alternativen leisten es nicht:
+   *
+   * - `05 01` Status-Enquiry liefert den Zustand des **Terminals** (fuer
+   *   zeitgesteuerte Aktionen wie Kassenschnitt), nicht den des letzten
+   *   Vorgangs. Kein Ergebniscode, keine Belegnummer.
+   * - `06 10` Send Turnover Totals liefert eine Summe ueber alle gespeicherten
+   *   Vorgaenge. Damit liesse sich hoechstens indirekt schliessen, ob einer
+   *   dazugekommen ist — und bei parallelem Betrieb nicht einmal das.
+   * - `84 9C` Repeat Statusinfo setzt voraus, dass der Dialog noch steht. Genau
+   *   der ist beim Verbindungsabriss weg.
+   *
+   * `06 20` ist damit der einzige Weg, der Ergebnis **und** Belegnummer
+   * zurueckgibt — und die Belegnummer braucht man, um ueberhaupt stornieren zu
+   * koennen.
+   *
+   * ## Was am echten Terminal noch zu pruefen ist
+   *
+   * Ob ein **CCV Base Next** diesen Befehl beherrscht, konnte ich nicht
+   * belegen. `06 20` ist Teil des Standards und Portalum.Zvt setzt ihn um,
+   * dessen Testliste nennt aber CardComplete, Hobex, Worldline und Global
+   * Payments — CCV nicht. Vor dem Pilotbetrieb am echten Geraet nachweisen;
+   * faellt es aus, bleibt als Rueckfallebene die Kombination aus `06 10` und
+   * einem Abgleich ueber das Tagesjournal.
+   */
+  async queryLastTransaction(): Promise<PaymentOutcome> {
+    const daten = Uint8Array.from([
+      ...encodeBcd(this.password, 3),
+      0x03,
+      SERVICE_BYTE_STATUS_ONLY,
+    ])
+    return this.runDialogue(ECR_COMMAND.repeatReceipt, daten, 'Nachfrage letzter Vorgang', {
       expectStatusInformation: true,
     })
   }

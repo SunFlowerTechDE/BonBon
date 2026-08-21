@@ -61,7 +61,11 @@ function beschreibeFehler(fehler: unknown): string {
  * „nicht bezahlt" bedeutet, und schon gar nicht in einem, das „bezahlt"
  * bedeutet (CLAUDE.md, Regel 15).
  */
-async function auswerten(ausgang: PaymentOutcome, drucker: PaymentPort): Promise<number> {
+async function auswerten(
+  ausgang: PaymentOutcome,
+  drucker: PaymentPort,
+  erwarteterBetrag: number,
+): Promise<number> {
   console.log('')
   console.log('='.repeat(78))
 
@@ -116,20 +120,64 @@ async function auswerten(ausgang: PaymentOutcome, drucker: PaymentPort): Promise
       }
       console.log('')
       console.log('  Aufloesung nach Spezifikation, in dieser Reihenfolge:')
-      console.log('    1. Status-Information erneut anfordern (NAK 84 9C)')
-      console.log('    2. Nachfragen mit Status-Enquiry (05 01)')
+      console.log('    1. Status-Information erneut anfordern (NAK 84 9C) — geht nur,')
+      console.log('       solange der Dialog steht. Beim Abriss ist er weg.')
+      console.log('    2. Nachfragen mit Repeat Receipt (06 20) — liefert Ergebnis UND Belegnummer')
       console.log('    3. Stornieren mit Reversal (06 30) und 87<receipt-no>')
       console.log('')
 
-      if (ausgang.receiptNumber === undefined) {
-        console.log('  Ohne Belegnummer bleibt nur Weg 1 und 2 — der Spike bricht hier ab.')
-        console.log('  Im Betrieb muesste die Kasse den Kassierer einbeziehen.')
+      // --- Schritt 1: nachfragen ---------------------------------------
+      //
+      // Ohne diesen Schritt kennt die Kasse die Belegnummer gar nicht und
+      // koennte auch nicht stornieren. Im Betrieb faellt sie nicht vom Himmel.
+      console.log('  Der Spike geht Weg 2 und fragt nach:')
+      console.log('')
+      const nachfrage = await drucker.queryLastTransaction()
+      console.log('')
+
+      if (nachfrage.kind === 'approved') {
+        const passt = nachfrage.amount === erwarteterBetrag
+        console.log('  Das Terminal meldet einen erfolgreichen letzten Vorgang:')
+        console.log('    Betrag      ' + euro(nachfrage.amount))
+        console.log('    Belegnummer ' + (nachfrage.receiptNumber ?? '—'))
+        console.log('')
+
+        if (passt) {
+          console.log('  Der Betrag stimmt mit dem angeforderten ueberein. Der Vorgang ist')
+          console.log('  damit aufgeklaert: der Kunde HAT bezahlt.')
+          console.log('')
+          console.log('  Die Kasse kann den Bon jetzt als bezahlt abschliessen — mit der')
+          console.log('  Belegnummer aus der Nachfrage. Ein Storno waere hier falsch.')
+          return 0
+        }
+
+        console.log('  ACHTUNG: Der Betrag weicht ab (angefordert ' + euro(erwarteterBetrag) + ').')
+        console.log('  Der letzte Vorgang gehoert also womoeglich zu einem anderen Bon.')
+        console.log('  Hier darf nicht automatisch storniert werden — ein Mensch muss ran.')
         return 3
       }
 
-      console.log('  Der Spike geht Weg 3 und storniert vorsichtshalber:')
+      if (nachfrage.kind === 'declined' || nachfrage.kind === 'aborted') {
+        console.log('  Das Terminal meldet zum letzten Vorgang: ' + nachfrage.reason)
+        console.log('  Es gab also keine erfolgreiche Zahlung. Der Bon bleibt offen.')
+        return 1
+      }
+
+      console.log('  Auch die Nachfrage blieb ohne klares Ergebnis: ' + nachfrage.reason)
       console.log('')
-      const storno = await drucker.reverse(ausgang.receiptNumber)
+
+      // --- Schritt 3: stornieren ---------------------------------------
+      const belegnummer = nachfrage.receiptNumber ?? ausgang.receiptNumber
+      if (belegnummer === undefined) {
+        console.log('  Ohne Belegnummer ist auch kein Storno moeglich.')
+        console.log('  Jetzt muss ein Mensch ran: Terminal-Beleg pruefen, Tagesjournal')
+        console.log('  abgleichen. Die Software raet nicht.')
+        return 3
+      }
+
+      console.log('  Der Spike geht Weg 3 und storniert vorsichtshalber Beleg ' + belegnummer + ':')
+      console.log('')
+      const storno = await drucker.reverse(belegnummer)
       console.log('')
       if (storno.kind === 'approved') {
         console.log('  Storno erfolgreich — es GAB also eine Zahlung, sie ist jetzt zurueck.')
@@ -179,7 +227,7 @@ async function main(): Promise<number> {
       console.log('')
       console.log('--- Kassenschnitt ' + '-'.repeat(60))
       const ausgang = await terminal.endOfDay()
-      return auswerten(ausgang, terminal)
+      return auswerten(ausgang, terminal, betrag)
     }
 
     const stornoNummer = argWert(argv, '--storno', '')
@@ -187,7 +235,7 @@ async function main(): Promise<number> {
       console.log('')
       console.log('--- Storno Beleg ' + stornoNummer + ' ' + '-'.repeat(50))
       const ausgang = await terminal.reverse(stornoNummer)
-      return auswerten(ausgang, terminal)
+      return auswerten(ausgang, terminal, betrag)
     }
 
     console.log('')
@@ -198,7 +246,7 @@ async function main(): Promise<number> {
         console.log('  Anzeige am Tresen: ' + fortschritt.text)
       },
     })
-    return auswerten(ausgang, terminal)
+    return auswerten(ausgang, terminal, betrag)
   } catch (fehler) {
     console.error('')
     console.error('='.repeat(78))

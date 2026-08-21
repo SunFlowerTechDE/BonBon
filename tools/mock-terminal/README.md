@@ -51,33 +51,63 @@ ankommt — **der Betrieb weiß nicht, ob der Kunde bezahlt hat.**
 Im Spike durchgespielt:
 
 ```
-1. pnpm zahlung -- --betrag 940
+1. Zahlung ueber 9,40 EUR
    -> UNKLARER AUSGANG, Belegnummer unbekannt
 
    Terminal intern:  *** AUTORISIERT: Beleg 0001, 940 Cent ***
                      *** Verbindung wird gekappt, bevor die Status-Information
                          rausgeht. Die Kasse erfaehrt nichts. ***
 
-2. pnpm zahlung -- --storno 0001
-   -> ZAHLUNG ANGENOMMEN, 9,40 EUR
-   Der Kunde WAR also belastet. Das Storno hat es rückgängig gemacht.
+2. Nachfrage: Repeat Receipt (06 20), Service-byte 03
+   -> Betrag 9,40 EUR, Belegnummer 0001, Ergebnis "kein Fehler"
 
-3. pnpm zahlung -- --storno 0001   (Gegenprobe)
-   -> ZAHLUNG ABGELEHNT: Storno nicht möglich
-   Beweis, dass Schritt 2 tatsächlich gewirkt hat.
+3. Betrag stimmt mit dem angeforderten ueberein
+   -> aufgeklaert: der Kunde HAT bezahlt. Die Kasse schliesst den Bon mit
+      dieser Belegnummer ab. Ein Storno waere hier falsch.
 ```
 
+Gegenprobe mit dem Fehlerbild `timeout`, bei dem nichts autorisiert wurde:
+
+```
+2. Nachfrage -> "Funktion nicht moeglich"
+3. Es gab keine erfolgreiche Zahlung. Der Bon bleibt offen.
+```
+
+**Schritt 2 ist der Kern.** Ohne ihn kennt die Kasse die Belegnummer gar nicht
+und könnte nicht einmal stornieren — im Betrieb fällt sie nicht vom Himmel.
+
 **Wie eine Kasse den Fall auflöst**, nach ZVT-Spezifikation, in dieser
-Reihenfolge (steht auch ausführlich im Code bei `unknownOutcome`):
+Reihenfolge (steht auch ausführlich im Code bei `unknownOutcome` und
+`queryLastTransaction`):
 
 1. **Status-Information erneut anfordern** — negative Quittung `84 9C`
-   („Repeat Statusinfo"). Der günstigste Weg, es wird nichts rückgängig
-   gemacht.
-2. **Nachfragen** — `05 01` Status-Enquiry.
-3. **Stornieren** — `06 30` Reversal mit `87<receipt-no>`. Der sichere Weg,
-   wenn 1 und 2 nichts ergeben: lieber eine Zahlung stornieren, die nie
+   („Repeat Statusinfo"). Setzt voraus, dass der Dialog noch steht; beim
+   Verbindungsabriss ist er weg, also meist nicht anwendbar.
+2. **Nachfragen** — `06 20` Repeat Receipt mit Service-byte `03`. Die
+   Spezifikation nennt ihn wörtlich für diesen Zweck (2.20.2): *„the PT sends
+   the Status-Information of the last transaction executed. This ensures that
+   the ECR can resynchronise in case of an inconclusive ending of a
+   transaction."* Der einzige Weg, der Ergebnis **und** Belegnummer liefert.
+   `05 01` Status-Enquiry leistet das nicht — es meldet den Zustand des
+   Terminals, nicht den des letzten Vorgangs.
+3. **Stornieren** — `06 30` Reversal mit `87<receipt-no>`. Nur wenn 2 kein
+   klares Ergebnis bringt: lieber eine Zahlung stornieren, die nie
    stattgefunden hat — das Terminal antwortet dann „Storno nicht möglich" —,
    als eine erfolgte Belastung zu übersehen.
+
+Weicht der bei 2 gemeldete Betrag vom angeforderten ab, wird **nicht**
+automatisch storniert: dann gehört der letzte Vorgang womöglich zu einem
+anderen Bon.
+
+Zusätzliches Sicherheitsnetz aus dem Protokoll selbst (2.2.8): Bleibt die
+Quittung der Kasse zur Status-Information aus, führt das Terminal von sich aus
+ein **Auto-Reversal** durch — allerdings erst nach Entnahme der Karte, und
+danach nicht mehr. Darauf allein darf sich die Kasse nicht verlassen.
+
+Ob ein **CCV Base Next** `06 20` beherrscht, ist nicht belegt. Der Befehl
+gehört zum Standard und Portalum.Zvt setzt ihn um, dessen Testliste nennt aber
+CardComplete, Hobex, Worldline und Global Payments — CCV nicht. Vor dem
+Pilotbetrieb am echten Gerät nachweisen.
 
 Bleibt es unklar, entscheidet ein Mensch. Die Software rät nicht
 (CLAUDE.md, Regel 15).
@@ -92,6 +122,23 @@ vom 20.11.2020 (VdTH, `PA00P015_13.09_final_en.pdf`), gegengeprüft an
 
 Die Spezifikation gibt es kostenlos beim
 [VdTH](https://www.terminalhersteller.de/Downloads.aspx).
+
+> ### Offener Punkt: Revision 13.13 nachziehen
+>
+> Umgesetzt ist **13.09** vom 20.11.2020. Beim VdTH liegt inzwischen
+> **13.13** vom 17.06.2025.
+>
+> Für den Mock unkritisch — er spricht mit sich selbst. **Vor dem ersten
+> echten Terminal muss jemand die Unterschiede durchsehen**, besonders bei:
+>
+> - **Ergebniscodes** (Kapitel 10) — neue Codes laufen hier als „unbekannter
+>   ZVT-Ergebniscode 0x.." auf. Sichtbar ist gewollt, am Tresen aber unschön.
+> - **Zwischenständen** (Tabelle 17) — dasselbe für die Anzeige.
+> - **Repeat Receipt (06 20)** und dem Service-byte, weil die Auflösung eines
+>   unklaren Ausgangs daran hängt.
+> - **TLV-Tags**, falls wir sie später brauchen.
+>
+> Erledigt in: —
 
 ### APDU
 
@@ -111,6 +158,7 @@ entspricht 0x035D = 861 Byte.
 | `06 01` | ECR → PT | Authorisation |
 | `06 30` | ECR → PT | Reversal (Storno) |
 | `06 50` | ECR → PT | End-of-Day (Kassenschnitt) |
+| `06 20` | ECR → PT | Repeat Receipt (Nachfrage letzter Vorgang) |
 | `06 B0` | ECR → PT | Abort |
 | `04 FF` | PT → ECR | Intermediate Status-Information |
 | `04 0F` | PT → ECR | Status-Information (Ergebnis in BMP 27) |
@@ -123,7 +171,7 @@ Beträge sind **6 Byte gepacktes BCD** (BMP 04) in der kleinsten
 Währungseinheit — 3,80 EUR sind `00 00 00 00 03 80`. Kein Fließkomma, nirgends
 (CLAUDE.md, Regel 3).
 
-### Zwei Stolperstellen
+### Drei Stolperstellen
 
 **Die Registrierung wird nur mit `06 0F` Completion beantwortet**, ohne
 Status-Information. Beim ersten Bauen hat der Client sie deshalb als unklaren
@@ -136,6 +184,10 @@ man englisch „Expired card", deutsch aber „Karte einstecken". Maßgeblich is
 die deutsche Spalte — Portalum.Zvt sagt an derselben Stelle „Insert card". Ein
 Test hält das fest.
 
+**`05 01` Status-Enquiry ist nicht das, wonach es klingt.** Es meldet den
+Zustand des Terminals für zeitgesteuerte Aktionen, nicht das Ergebnis des
+letzten Vorgangs. Für die Wiederaufnahme nach einem Abriss braucht es `06 20`.
+
 ---
 
 ## Aufbau
@@ -146,6 +198,7 @@ Kein Socket in der Anwendungslogik. Die Kasse kennt nur `PaymentPort`
 ```
 @bonbon/ports
   PaymentPort            Interface, vier Ausgänge inkl. unknown
+                         plus queryLastTransaction() für die Wiederaufnahme
   ZvtPaymentTerminal     ZVT über TCP — Mock und echtes Gerät, nur andere IP
   zvt/protocol.ts        APDU, BCD, Bitmaps — reine Bytes, kein I/O
   zvt/constants.ts       Befehle, Ergebniscodes, Zwischenstände

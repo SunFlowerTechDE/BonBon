@@ -31,9 +31,36 @@ export const ECR_COMMAND = {
   endOfDay: [0x06, 0x50],
   /** 06 B0 Abort — Abbruch durch die Kasse */
   abort: [0x06, 0xb0],
-  /** 05 01 Status-Enquiry */
+  /** 05 01 Status-Enquiry — Zustand des Terminals, nicht des letzten Vorgangs */
   statusEnquiry: [0x05, 0x01],
+  /**
+   * 06 20 Repeat Receipt — wiederholt die Status-Information des zuletzt
+   * ausgefuehrten Vorgangs.
+   *
+   * Spezifikation 2.20.2, woertlich: "Depending on the service-byte the PT
+   * sends the Status-Information of the last transaction executed. This
+   * ensures that the ECR can resynchronise in case of an inconclusive ending
+   * of a transaction."
+   *
+   * Das ist der dokumentierte Weg, nach einem Verbindungsabriss wieder
+   * gleichzuziehen — und der einzige, der Ergebnis UND Belegnummer liefert.
+   */
+  repeatReceipt: [0x06, 0x20],
+  /** 06 10 Send Turnover Totals — Ueberblick ueber alle gespeicherten Vorgaenge */
+  sendTurnoverTotals: [0x06, 0x10],
 } as const
+
+/**
+ * Service-byte fuer Repeat Receipt (Tabelle 5).
+ *
+ *   xxxx xxx1  ECR requires Status-Information (as in the original transaction)
+ *   xxxx xx1x  No print receipt
+ *
+ * 0x03 heisst also: Ergebnis schicken, aber nichts drucken. Beim Nachfragen
+ * nach einem unklaren Ausgang will die Kasse die Daten, keinen zweiten Beleg
+ * aus dem Terminal.
+ */
+export const SERVICE_BYTE_STATUS_ONLY = 0x03
 
 /** Befehle des Terminals an die Kasse (PT -> ECR). */
 export const PT_COMMAND = {

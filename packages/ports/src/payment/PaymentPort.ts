@@ -86,6 +86,15 @@ export interface PaymentPort {
    */
   reverse(receiptNumber: string): Promise<PaymentOutcome>
 
+  /**
+   * Fragt die Status-Information des zuletzt ausgefuehrten Vorgangs ab.
+   *
+   * Der fehlende Schritt nach einem `unknown`-Ausgang: die Kasse kennt weder
+   * Ergebnis noch Belegnummer und muss beides erst herausfinden, bevor sie
+   * ueberhaupt stornieren koennte.
+   */
+  queryLastTransaction(): Promise<PaymentOutcome>
+
   /** Kassenschnitt. Schliesst den Terminal-Tag ab. */
   endOfDay(): Promise<PaymentOutcome>
 

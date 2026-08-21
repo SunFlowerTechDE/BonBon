@@ -81,6 +81,7 @@ export {
   PT_COMMAND,
   RESULT_CODE,
   RESULT_TEXT,
+  SERVICE_BYTE_STATUS_ONLY,
   intermediateText,
   isAbort,
   isPositiveAck,

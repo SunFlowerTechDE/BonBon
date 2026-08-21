@@ -53,6 +53,11 @@ export class MockTerminal {
   /** Vorgaenge, die intern autorisiert wurden — auch die, deren Antwort nie ankam. */
   readonly autorisierteVorgaenge: { receiptNumber: string; amountInCents: number }[] = []
 
+  /** Der zuletzt ausgefuehrte Vorgang — Grundlage fuer Repeat Receipt. */
+  private letzterVorgang:
+    | { receiptNumber: string; amountInCents: number; resultCode: number }
+    | undefined
+
   private belegzaehler = 0
   private tracezaehler = 0
 
@@ -238,6 +243,55 @@ export class MockTerminal {
       return
     }
 
+    if (klasse === ECR_COMMAND.repeatReceipt[0] && befehl === ECR_COMMAND.repeatReceipt[1]) {
+      // Repeat Receipt: Status-Information des zuletzt ausgefuehrten Vorgangs.
+      // Genau der Befehl, mit dem eine Kasse nach einem Verbindungsabriss
+      // wieder gleichzieht (Spezifikation 2.20.2).
+      const letzter = this.letzterVorgang
+      this.onLog('<- Nachfrage letzter Vorgang (' + bezeichnung + ')')
+      ack()
+      await schlafen(this.stepDelayMs)
+      if (letzter === undefined) {
+        this.onLog('   kein Vorgang gespeichert')
+        senden(
+          {
+            controlClass: PT_COMMAND.statusInformation[0],
+            controlInstruction: PT_COMMAND.statusInformation[1],
+            data: Uint8Array.from([0x27, RESULT_CODE.functionNotPossible]),
+          },
+          'Status-Information',
+        )
+      } else {
+        this.onLog(
+          '   letzter Vorgang: Beleg ' + letzter.receiptNumber + ', ' +
+            String(letzter.amountInCents) + ' Cent, ' + resultText(letzter.resultCode),
+        )
+        const daten: number[] = [0x27, letzter.resultCode]
+        if (letzter.resultCode === RESULT_CODE.noError) {
+          daten.push(0x04, ...encodeAmount(letzter.amountInCents))
+          daten.push(0x87, ...encodeBcd(Number.parseInt(letzter.receiptNumber, 10), 2))
+        }
+        senden(
+          {
+            controlClass: PT_COMMAND.statusInformation[0],
+            controlInstruction: PT_COMMAND.statusInformation[1],
+            data: Uint8Array.from(daten),
+          },
+          'Status-Information (Wiederholung)',
+        )
+      }
+      await schlafen(this.stepDelayMs)
+      senden(
+        {
+          controlClass: PT_COMMAND.completion[0],
+          controlInstruction: PT_COMMAND.completion[1],
+          data: new Uint8Array(0),
+        },
+        'Completion',
+      )
+      return
+    }
+
     if (klasse === ECR_COMMAND.endOfDay[0] && befehl === ECR_COMMAND.endOfDay[1]) {
       const summe = this.autorisierteVorgaenge.reduce((a, v) => a + v.amountInCents, 0)
       this.onLog(
@@ -318,6 +372,11 @@ export class MockTerminal {
     if (szenario.dropAfterAuthorisation === true) {
       // Die Zahlung ist beim Netzbetreiber durch. Das Terminal merkt sie sich.
       this.autorisierteVorgaenge.push({ receiptNumber: belegnummer, amountInCents: betragInCent })
+      this.letzterVorgang = {
+        receiptNumber: belegnummer,
+        amountInCents: betragInCent,
+        resultCode: RESULT_CODE.noError,
+      }
       this.onLog('   *** AUTORISIERT: Beleg ' + belegnummer + ', ' + String(betragInCent) + ' Cent ***')
       this.onLog('   *** Fehlerbild abriss-nach-autorisierung: Verbindung wird gekappt, ***')
       this.onLog('   *** bevor die Status-Information rausgeht. Die Kasse erfaehrt nichts. ***')
@@ -332,6 +391,11 @@ export class MockTerminal {
     const erfolgreich = szenario.resultCode === RESULT_CODE.noError
     if (erfolgreich) {
       this.autorisierteVorgaenge.push({ receiptNumber: belegnummer, amountInCents: betragInCent })
+    }
+    this.letzterVorgang = {
+      receiptNumber: belegnummer,
+      amountInCents: betragInCent,
+      resultCode: szenario.resultCode,
     }
 
     const daten: number[] = [0x27, szenario.resultCode]
