@@ -17,7 +17,8 @@
     "spike": "pnpm --filter @bonbon/core run build && pnpm --filter @bonbon/tse-spike run start",
     "testbon": "pnpm --filter \"./packages/**\" run build && pnpm --filter @bonbon/escpos-testbon run start",
     "terminal": "pnpm --filter \"./packages/**\" run build && pnpm --filter @bonbon/mock-terminal run start",
-    "zahlung": "pnpm --filter \"./packages/**\" run build && pnpm --filter @bonbon/zvt-spike run start"
+    "zahlung": "pnpm --filter \"./packages/**\" run build && pnpm --filter @bonbon/zvt-spike run start",
+    "eventlog": "pnpm --filter \"./packages/**\" run build && pnpm --filter @bonbon/eventlog-bench run start"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

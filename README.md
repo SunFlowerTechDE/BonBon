@@ -31,6 +31,7 @@ cp .env.example .env    # Werte aus dem fiskaltrust Portal eintragen
 | `pnpm testbon` | ESC/POS-Testbon gegen escpresso auf Port 9100 ([Anleitung](tools/escpos-testbon/README.md)) |
 | `pnpm terminal` | ZVT-Mock-Terminal auf Port 20007 ([Anleitung](tools/mock-terminal/README.md)) |
 | `pnpm zahlung` | Kartenzahlung gegen das Mock-Terminal ([Anleitung](tools/zvt-spike/README.md)) |
+| `pnpm eventlog` | Event Log unter Last, Absturz- und Manipulationstest ([Anleitung](tools/eventlog-bench/README.md)) |
 
 ## Struktur
 
@@ -42,6 +43,7 @@ apps/desktop/           Tauri-App                                        [Platzh
 apps/backend/           Fastify + PostgreSQL                             [Platzhalter]
 tools/mock-terminal/    ZVT-Terminalsimulator, Port 20007                [fertig]
 tools/zvt-spike/        Kartenzahlung gegen das Mock-Terminal (M0)        [fertig]
+tools/eventlog-bench/   Event Log unter Last (M0)                        [fertig]
 tools/tse-spike/        fiskaltrust-Rundlauf (M0)                        [fertig]
 tools/escpos-testbon/   ESC/POS-Testbon (M0)                             [fertig]
 ```

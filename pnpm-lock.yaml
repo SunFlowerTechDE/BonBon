@@ -54,6 +54,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ports
 
+  tools/eventlog-bench:
+    dependencies:
+      '@bonbon/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   tools/mock-terminal:
     dependencies:
       '@bonbon/core':

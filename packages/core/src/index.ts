@@ -27,3 +27,17 @@ export {
 } from './money.js'
 
 export { type Clock, type IdGenerator, type IsoTimestamp, isoTimestamp } from './time.js'
+
+export {
+  GENESIS_HASH,
+  type ChainProblem,
+  type ChainProblemKind,
+  type ChainVerification,
+  type ChainedEvent,
+  type Hasher,
+  type SaleEvent,
+  chainEvent,
+  eventHashInput,
+  hashEvent,
+  verifyChain,
+} from './events.js'
