@@ -218,3 +218,61 @@ Zwei Dinge sind trotzdem einzuplanen:
    Ereignisses festhalten. Dann muss im Alltag nur der laufende Tag geprüft
    werden — rund 800 Ereignisse statt 2.920.000. Die vollständige Prüfung
    bleibt für den Ernstfall.
+
+---
+
+## Offene Punkte
+
+Aus der Auswertung von M0 stehengeblieben. **Nicht umgesetzt** — hier notiert,
+damit sie zum richtigen Zeitpunkt entschieden werden.
+
+### 1. `synchronous = NORMAL` gegen `FULL` — Entscheidung in M3
+
+`NORMAL` kann bei **Stromverlust** die letzten Transaktionen verlieren. Für
+eine Kasse heißt das konkret:
+
+> Bon gedruckt, TSE signiert, Kunde hat bezahlt — und das lokale Log kennt den
+> Vorgang nicht mehr.
+
+Das ist nicht dasselbe wie „ein Ereignis fehlt". Der Vorgang ist nach außen
+vollzogen: der Kunde hat einen Beleg, die TSE hat signiert, das Geld ist in
+der Lade. Nur die eigene Aufzeichnung fehlt.
+
+**In M3 zu tun:** `FULL` unter denselben zwei Lastprofilen messen und
+bewusst entscheiden. Bei p50 von 0,300 ms ist Luft; die Frage ist, was `FULL`
+auf einer mechanischen Platte aus dem p99 und dem Maximum macht. Fällt die
+Entscheidung für `NORMAL`, gehört die Begründung dokumentiert — dann ist es
+ein bewusstes Restrisiko und kein Versehen.
+
+Ein echter Stromausfalltest an der Pilothardware gehört ohnehin in M6.
+
+### 2. Der Prüfpunkt je Tagesabschluss muss in der Kette liegen
+
+Oben empfohlen: Hash und Sequenznummer des letzten Ereignisses je
+Tagesabschluss festhalten, damit im Alltag nur der laufende Tag zu prüfen ist.
+
+**Der Prüfpunkt darf dabei nicht neben der Kette liegen, sondern muss selbst
+Teil von ihr sein** — also ein eigenes Ereignis mit `prev_hash` und `hash` wie
+jedes andere.
+
+Läge er daneben, in einer eigenen Tabelle oder Datei, ließe er sich fälschen:
+Wer den Prüfpunkt neu berechnet, versteckt damit **jede** Manipulation davor,
+weil die Prüfung ja nur noch ab dem Prüfpunkt läuft. Als Kettenglied geht das
+nicht — ein gefälschter Prüfpunkt bricht die Kette an seiner eigenen Stelle.
+
+### 3. Bündelung der Ereignisse eines Bons in einer Transaktion
+
+Der stärkere Hebel gegen Checkpoint-Aussetzer als `wal_autocheckpoint`: alle
+Ereignisse eines Bons in **einer** SQLite-Transaktion schreiben. Statt acht
+Commits je Bon einer.
+
+**Kollidiert aber mit geparkten Bons.** Wer einen Bon offen liegen lässt und
+weiterkassiert, erwartet, dass die bereits erfassten Positionen haltbar sind —
+nicht in einer offenen Transaktion hängen, die ein Absturz verwirft.
+
+Denkbar wäre eine Bündelung nur für den Abschluss (Zahlung, Bonabschluss,
+Belegausgabe), während einzelne Positionen weiterhin sofort committen.
+
+**Bei p99 von 1,4 ms im realistischen Stoßprofil ist das kein Anlass.** Hier
+notiert für den Fall, dass ein Kunde mit echter Dauerlast oder langsamerer
+Hardware auffällt.

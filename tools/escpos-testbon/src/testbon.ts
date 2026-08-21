@@ -14,15 +14,15 @@ import {
   type Belegposition,
   type Cents,
   type Haendlerangaben,
-  type Steuerausweis,
   type TseSignatur,
   type Verzehrart,
   type Zahlung,
+  type Steuerzeile,
   addCents,
   cents,
   isoTimestamp,
   multiplyCents,
-  subtractCents,
+  steuerausweis,
   sumCents,
 } from '@bonbon/core'
 
@@ -46,43 +46,23 @@ export interface Vorgangsdaten {
 export type { Haendlerangaben as Betriebsdaten, TseSignatur as Signaturdaten }
 
 // --- Rechnung --------------------------------------------------------------
+//
+// Die Steuer- und Rundungslogik liegt jetzt in @bonbon/core (Regel 17). Hier
+// bleibt nur die Zeilensumme, weil sie zum Warenkorb gehoert und nicht zur
+// Steuer.
 
 export function zeilensumme(position: Warenkorbposition): Cents {
   return multiplyCents(position.einzelpreis, position.menge)
 }
 
-/**
- * Herausrechnen der Umsatzsteuer aus einem Bruttobetrag.
- *
- * Benannte Rundungsregel: kaufmaennisch, halbe Cent aufwaerts. Gerechnet wird
- * ausschliesslich in Ganzzahlen.
- *
- *   Steuer = brutto * satz / (1000 + satz)
- *
- * Hinweis fuer M1: gehoert nach @bonbon/core, zusammen mit den uebrigen
- * Rundungsregeln und Property-based Tests.
- */
-export function steuerAusBrutto(brutto: Cents, satzPromille: number): Cents {
-  const zaehler = brutto * satzPromille
-  const nenner = 1000 + satzPromille
-  const abgerundet = Math.floor(zaehler / nenner)
-  const rest = zaehler - abgerundet * nenner
-  return cents(rest * 2 >= nenner ? abgerundet + 1 : abgerundet)
-}
-
-/** Fasst die Positionen je Steuersatz zusammen, aufsteigend sortiert. */
-export function steuerzeilen(positionen: readonly Warenkorbposition[]): Steuerausweis[] {
-  const nachSatz = new Map<number, Cents>()
-  for (const position of positionen) {
-    const bisher = nachSatz.get(position.steuersatzPromille) ?? cents(0)
-    nachSatz.set(position.steuersatzPromille, addCents(bisher, zeilensumme(position)))
-  }
-  return [...nachSatz.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([steuersatzPromille, brutto]) => {
-      const steuer = steuerAusBrutto(brutto, steuersatzPromille)
-      return { steuersatzPromille, brutto, steuer, netto: subtractCents(brutto, steuer) }
-    })
+/** Steuerausweis des Bons — je Steuersatz einmal gerundet (Regel 17). */
+export function steuerzeilen(positionen: readonly Warenkorbposition[]): Steuerzeile[] {
+  return steuerausweis(
+    positionen.map((p) => ({
+      brutto: zeilensumme(p),
+      steuersatzPromille: p.steuersatzPromille,
+    })),
+  )
 }
 
 export function gesamtsumme(positionen: readonly Warenkorbposition[]): Cents {

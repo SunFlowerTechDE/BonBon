@@ -22,6 +22,7 @@ export {
   addCents,
   cents,
   multiplyCents,
+  negateCents,
   subtractCents,
   sumCents,
 } from './money.js'
@@ -57,3 +58,17 @@ export {
   verzehrartText,
   zahlartText,
 } from './receipt.js'
+
+export {
+  STEUERSATZ,
+  type SteuersatzPromille,
+  type Steuerzeile,
+  type SteuerzeileEingabe,
+  bruttosumme,
+  nettoAusBrutto,
+  nettosumme,
+  rundeKaufmaennisch,
+  steuerAusBrutto,
+  steuerausweis,
+  steuersumme,
+} from './tax.js'

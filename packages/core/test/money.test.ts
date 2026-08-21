@@ -6,6 +6,7 @@ import {
   addCents,
   cents,
   multiplyCents,
+  negateCents,
   subtractCents,
   sumCents,
 } from '../src/index.js'
@@ -20,6 +21,22 @@ describe('cents()', () => {
 
   it('nimmt negative Betraege an — Storno und Rabatt brauchen sie', () => {
     expect(cents(-380)).toBe(-380)
+  })
+
+  it('kehrt das Vorzeichen um, ohne negative Null zu erzeugen', () => {
+    expect(negateCents(cents(380))).toBe(-380)
+    expect(negateCents(cents(-380))).toBe(380)
+    expect(Object.is(negateCents(cents(0)), 0)).toBe(true)
+  })
+
+  it('ebnet negative Null ein', () => {
+    // -0 === 0 ist wahr, Object.is(-0, 0) aber nicht — und in der Darstellung
+    // wuerde daraus "-0,00" auf dem Beleg. Ein Geldbetrag hat kein Vorzeichen,
+    // wenn er null ist.
+    expect(Object.is(cents(-0), 0)).toBe(true)
+    expect(Object.is(cents(-0), -0)).toBe(false)
+    expect(Object.is(subtractCents(cents(5), cents(5)), 0)).toBe(true)
+    expect(Object.is(multiplyCents(cents(-380), 0), 0)).toBe(true)
   })
 
   it('weist Euro-Betraege ab, statt sie still zu runden', () => {

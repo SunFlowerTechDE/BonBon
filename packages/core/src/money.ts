@@ -26,7 +26,10 @@ export function cents(value: number): Cents {
         'Euro gehoert in die Darstellungsschicht (CLAUDE.md, Regel 3).',
     )
   }
-  return value as Cents
+  // Negative Null einebnen. `-0 === 0` ist zwar wahr, aber `Object.is(-0, 0)`
+  // ist es nicht, und in der Darstellung wuerde daraus "-0,00" auf dem Beleg.
+  // Ein Geldbetrag hat kein Vorzeichen, wenn er null ist.
+  return (value === 0 ? 0 : value) as Cents
 }
 
 export const ZERO_CENTS: Cents = cents(0)
@@ -48,6 +51,18 @@ export function sumCents(values: readonly Cents[]): Cents {
     total += value
   }
   return cents(total)
+}
+
+/**
+ * Kehrt das Vorzeichen um — fuer Storno und Retoure.
+ *
+ * Gibt es als eigene Funktion, weil `-betrag` auf einem Branded Type nicht
+ * erlaubt ist und der Umweg ueber `number` an jeder Aufrufstelle die
+ * Typsicherheit aufweichen wuerde. Null bleibt Null, nicht negative Null.
+ */
+export function negateCents(a: Cents): Cents {
+  const wert: number = a
+  return cents(wert === 0 ? 0 : -wert)
 }
 
 /**

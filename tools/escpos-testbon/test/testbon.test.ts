@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { type Cents, cents } from '@bonbon/core'
+import { type Cents, cents, steuerAusBrutto } from '@bonbon/core'
 import {
   CHARACTERS_PER_LINE_80MM,
   EscPosReceiptRenderer,
@@ -23,7 +23,6 @@ import {
   type Warenkorbposition,
   abschliessen,
   gesamtsumme,
-  steuerAusBrutto,
   steuerzeilen,
   zeilensumme,
 } from '../src/testbon.js'

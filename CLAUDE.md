@@ -247,6 +247,49 @@ Im Datensatz stehen **keine** formatierten Zeichenketten: keine Zeilenumbrüche,
 Umrechnung nach Euro und jede Formatierung passieren ausschließlich im Renderer — das ist dieselbe Grenze wie in Regel 3, nur an einer Stelle festgemacht.
 
 Ein Renderer liest den Datensatz und erzeugt eine Ausgabe. Umgekehrt geht es nicht: aus gerenderten Bytes lässt sich der Datensatz nicht zurückgewinnen.
+
+### 17. Steuer wird je Steuersatz einmal gerundet, nicht je Position
+
+Zwei Wege wären denkbar, und sie liefern **unterschiedliche Ergebnisse**:
+
+| | |
+|---|---|
+| (a) | je Position runden, dann die gerundeten Steuerbeträge summieren |
+| (b) | je Steuersatz die Bruttosumme bilden und **einmal** daraus runden |
+
+**Gewählt ist (b).** Die DSFinV-K gibt es vor.
+
+In der Datei `Bonpos_USt` (lines_vat.csv) haben `POS_BRUTTO`, `POS_NETTO` und `POS_UST` **fünf Dezimalstellen** — auf Positionsebene wird also gar nicht auf Cent gerundet.
+
+In der Datei `Bonkopf_USt` (transactions_vat.csv) steht zu `BON_BRUTTO` wörtlich:
+
+> „An dieser Stelle ist nicht einfach die Summe aus den betroffenen Positionen zu bilden. Vielmehr muss der gedruckte Betrag dargestellt werden (Rechnungsdoppel). Beträge sind mit zwei Dezimalstellen darzustellen, obwohl das Datenfeld eigentlich auf 5 Dezimalstellen ausgelegt ist."
+>
+> — DSFinV-K Version 2.4, Anhang D, Datei „Bonkopf_USt"
+
+Der auf dem Beleg gedruckte Betrag je Steuersatz ist also der maßgebliche Wert, und er entsteht aus der Summe — nicht aus gerundeten Einzelteilen.
+
+Weg (a) hätte außerdem einen praktischen Nachteil: bei jeder Position entsteht ein Rundungsfehler, der sich über den Bon aufaddiert. Drei Positionen zu 3,33 € bei 19 % ergeben je Position gerundet 159 Cent Steuer, je Summe gerundet 160. Bei zwanzig Positionen werden daraus schnell mehrere Cent, und der Beleg zeigte eine Steuersumme, die zur Bruttosumme nicht passt.
+
+### Die Rundungsregel: kaufmännisch, halbe Einheit vom Nullpunkt weg
+
+Nicht „aufwärts". Bei positiven Beträgen ist beides dasselbe; sie unterscheiden sich nur bei negativen. „Aufwärts" (Richtung +∞) macht aus −2,5 → −2, „vom Nullpunkt weg" macht −3.
+
+Die Kasse braucht die zweite Variante, weil nur sie diese Zusicherung gibt:
+
+```
+steuer(−brutto) === −steuer(brutto)
+```
+
+Ein Storno muss den Verkauf **exakt** aufheben. Rundete die Retoure anders als der Verkauf, bliebe je Storno ein Cent stehen — und der fällt erst auf, wenn der Steuerberater die Summen nicht mehr nachrechnen kann.
+
+Gerechnet wird ausschließlich in Ganzzahlen: `rest * 2 >= nenner` statt einer Division. Kein Fließkomma, nirgends (Regel 3).
+
+### Netto wird nie eigenständig gerundet
+
+`netto = brutto − steuer`. Damit gilt ausnahmslos `netto + steuer === brutto`, auf jeder Zeile und in der Summe. Würde Netto eigen gerundet, ginge diese Gleichung gelegentlich um einen Cent daneben.
+
+**Geldbeträge sind nie negative Null.** `cents()` ebnet `-0` zu `0` ein. `-0 === 0` ist zwar wahr, `Object.is(-0, 0)` aber nicht — und in der Darstellung würde daraus „-0,00" auf dem Beleg.
 ---
 
 ## Struktur
@@ -306,7 +349,7 @@ Alles, was Geld kostet oder Hardware braucht, liegt hinter einem schmalen Interf
 | **M0** | Spike, zwei Wochen, kostenlos: fiskaltrust-Launcher-Rundlauf · ESC/POS gegen escpresso · ZVT gegen eigenen Mock · SQLite-Event-Log unter Last (500 Events/Minute) |
 | **M1** | `@bonbon/core` — Bonberechnung, Steuerlogik, Rabatte, Rundung, Event-Typen. Keine UI |
 | **M2** | Tauri-App, Artikelraster, Bon, Bardruck. Vollständig offline |
-| **M3** | Backend, Sync, TSE, Ausfallpfad, Signaturdaten auf dem Beleg |
+| **M3** | Backend, Sync, TSE, Ausfallpfad, Signaturdaten auf dem Beleg. Dazu die Entscheidung `synchronous NORMAL` gegen `FULL` — siehe [offene Punkte](tools/eventlog-bench/README.md#offene-punkte) |
 | **M4** | Tagesabschluss, Kassensturz, DSFinV-K-Export, ELSTER-Meldeassistent |
 | **M5** | ZVT-Kartenzahlung, ein Terminalmodell |
 | **M6** | Pilotbetrieb mit echten Geräten |
