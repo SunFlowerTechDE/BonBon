@@ -21,6 +21,26 @@ export const RECEIPT_CASE = {
   startTransaction: 0x4445000000000008n,
   /** Update-transaction-receipt — schreibt Positionen in einen laufenden Vorgang. */
   updateTransaction: 0x4445000000000009n,
+
+  // --- Lebenszyklus der Queue ---
+  // Laut Doku laufen diese Belege ausschliesslich im impliziten Ablauf und
+  // brauchen zwingend das Flag implicitTransaction.
+
+  /** Zero-receipt — Kommunikations- und Funktionstest der SecurityMechanism. */
+  zeroReceipt: 0x4445000000000002n,
+  /**
+   * Initial-operation receipt — nimmt die SecurityMechanism samt TSE in
+   * Betrieb. Einmalig pro Queue, ohne diesen Beleg signiert sie nicht.
+   */
+  initialOperation: 0x4445000000000003n,
+  /**
+   * Out-of-operation receipt — schaltet die SecurityMechanism ab und
+   * deaktiviert die Client-ID. Der Spike sendet diesen Beleg NIE; die
+   * Konstante steht hier nur der Vollstaendigkeit halber.
+   */
+  outOfOperation: 0x4445000000000004n,
+  /** Daily-closing — Tagesabschluss. */
+  dailyClosing: 0x4445000000000007n,
 } as const
 
 /**
@@ -89,6 +109,53 @@ export const STATE = {
   /** Fail: Verarbeitung gescheitert, nichts persistiert. */
   fail: 0xffffffffn,
 } as const
+
+/**
+ * Die unteren 32 Bit von ftState sind unabhaengige Flags, keine Zustandszahl.
+ * Ein Wert ungleich null bedeutet also nicht automatisch einen Fehler — aber
+ * er bedeutet auch nicht "alles in Ordnung". Beides muss man auseinanderhalten.
+ * docs: /poscreators/middleware-doc/general/reference-tables
+ */
+export const STATE_FLAGS: readonly (readonly [bigint, string, boolean])[] = [
+  // [Bit, Bedeutung, blockiert die Signatur?]
+  [0x00000001n, 'Security Mechanism ausser Betrieb — Queue nicht gestartet oder bereits gestoppt', true],
+  [0x00000002n, 'SCU voruebergehend nicht erreichbar (TSE-Ausfall)', true],
+  [0x00000008n, 'Deferred Queue Mode / Late Signing aktiv — es wird nachsigniert', false],
+  [0x00000040n, 'Nachricht der Middleware liegt vor', false],
+  [0x00000100n, 'Tagesabschluss faellig', false],
+  [0x00000200n, 'Monatsabschluss faellig', false],
+  [0x00000400n, 'Jahresabschluss faellig', false],
+]
+
+/** Alle Bits, die die Dokumentation kennt. */
+const KNOWN_STATE_BITS = STATE_FLAGS.reduce((mask, [bit]) => mask | bit, 0n)
+
+/**
+ * Ein gesetztes Bit, das die Dokumentation nicht auffuehrt.
+ * Das gilt als Fehler, nicht als "ok" (CLAUDE.md, Regel 12).
+ */
+export function unknownStateBits(state: bigint | undefined): bigint {
+  if (state === undefined) return 0n
+  const low = state & 0xffffffffn
+  if (low === STATE.error || low === STATE.fail) return 0n
+  return low & ~KNOWN_STATE_BITS
+}
+
+export interface StateFlag {
+  readonly text: string
+  readonly blocksSignature: boolean
+}
+
+/** Zerlegt die unteren 32 Bit in die einzelnen gesetzten Flags. */
+export function stateFlags(state: bigint | undefined): readonly StateFlag[] {
+  if (state === undefined) return []
+  const low = state & 0xffffffffn
+  if (low === STATE.error || low === STATE.fail) return []
+  return STATE_FLAGS.filter(([bit]) => (low & bit) === bit).map(([, text, blocksSignature]) => ({
+    text,
+    blocksSignature,
+  }))
+}
 
 // --- Typen -----------------------------------------------------------------
 
@@ -294,13 +361,22 @@ export function describeState(state: bigint | undefined): string {
   const suffix = ' (' + toHex(state) + ')'
   if (low === STATE.fail) return 'FAIL — Verarbeitung gescheitert, nichts persistiert' + suffix
   if (low === STATE.error) return 'ERROR — QueueItem angelegt, aber nicht abgeschlossen' + suffix
-  return 'ok' + suffix
+  if (low === 0n) return 'ohne Befund' + suffix
+
+  const unbekannt = unknownStateBits(state)
+  const flags = stateFlags(state)
+  const teile: string[] = []
+  if (flags.length > 0) teile.push(String(flags.length) + ' bekannte(s) Flag(s)')
+  if (unbekannt !== 0n) teile.push('UNBEKANNTE Bits ' + toHex(unbekannt))
+  return teile.join(' + ') + suffix
 }
 
 export function isFailureState(state: bigint | undefined): boolean {
   if (state === undefined) return false
   const low = state & 0xffffffffn
-  return low === STATE.fail || low === STATE.error
+  if (low === STATE.fail || low === STATE.error) return true
+  // Was die Doku nicht kennt, wird nicht durchgewinkt (CLAUDE.md, Regel 12).
+  return unknownStateBits(state) !== 0n
 }
 
 export function findSignature(response: ReceiptResponse, type: bigint): SignatureItem | undefined {

@@ -86,6 +86,18 @@ Der Kunde ist zehn Jahre aufbewahrungspflichtig (§ 147 AO). Eine Sperre wäre f
 
 Verkaufen, abschließen und drucken funktionieren ohne Internet vollständig. Bei TSE-Ausfall: Verkauf lokal abschließen, Signatur in die Warteschlange, Ausfall mit Zeitpunkt und Ursache protokollieren, Beleg trägt den Ausfallhinweis, Nachsignierung im Hintergrund und als solche markiert.
 
+**Zwei Zustände, die nie gleich aussehen dürfen.** Beide führen dazu, dass keine Signatur zurückkommt — aber sie verlangen entgegengesetztes Verhalten:
+
+| | TSE ausgefallen | TSE nicht in Betrieb genommen oder falsch konfiguriert |
+|---|---|---|
+| Was ist es | Dokumentierter Notbetrieb | Einrichtungsfehler |
+| Verkauf | läuft weiter | **muss scheitern** |
+| Beleg | trägt den Ausfallhinweis | wird nicht ausgegeben |
+| Vorgang | geht in die Nachsignierungs-Warteschlange | geht **nicht** in die Warteschlange |
+| Sichtbarkeit | protokolliert, im Hintergrund geheilt | laut und sichtbar, blockiert die Einrichtung |
+
+Ein Einrichtungsfehler darf **nicht in den Ausfallpfad rutschen**. Sonst verkauft die Kasse wochenlang scheinbar normal, sammelt Vorgänge für eine Nachsignierung, die nie kommen kann — und der Betreiber merkt es erst bei der Kassennachschau. Der Ausfallpfad ist für eine TSE gedacht, die in Betrieb ist und gerade nicht antwortet, nicht für eine, die es nie war.
+
 ### 9. Keine Konformitätsversprechen in UI, Texten oder Code-Kommentaren
 
 Nie: „rechtssicher", „finanzamtssicher", „GoBD-konform", „steuerlich korrekt". Jede dieser Formulierungen ist eine Beschaffenheitsgarantie nach § 434 BGB und schaltet die Haftungsbegrenzung in den AGB aus.
@@ -111,6 +123,46 @@ Der Grund ist kein Stilempfinden: Bonberechnung und Event Log müssen determinis
 `new Date('2026-08-21T10:15:00+02:00')` und `Date.parse(…)` bleiben erlaubt — das ist Umrechnung, nicht Uhrablesen.
 
 **Schaltsekunde:** `IsoTimestamp` lässt `23:59:60` zu, weil ISO 8601 sie kennt und ein gültiger TSE-Zeitstempel nicht abgewiesen werden soll. `Date` kennt sie nicht — `Date.parse('2016-12-31T23:59:60Z')` liefert `NaN`. **Jede Umwandlung von `IsoTimestamp` nach `Date` muss den Fall deshalb ausdrücklich behandeln: entweder ablehnen oder `:60` auf `:59.999` normalisieren.** Stillschweigend durchreichen ist der eine verbotene Weg — sonst steht ein `Invalid Date` im Event Log, und das fällt erst beim Export auf.
+
+**TSE-Zeitstempel sind keine Uhr für Reihenfolge oder Dauer.** Sie dürfen **niemals** zur Bestimmung von Reihenfolge oder Dauer verwendet werden. Die Reihenfolge der Ereignisse ergibt sich ausschließlich aus der lückenlosen Sequenznummer je Gerät (Regel 2).
+
+Gemessen an einem echten Vorgang aus dem M0-Spike:
+
+```
+Startzeit (start-transaction):  2026-08-21T17:03:43.120Z
+Log-Zeit  (finish-transaction): 2026-08-21T17:03:43.000Z
+```
+
+Die Log-Zeit hat nur Sekundengenauigkeit (`utcTimeWithSeconds`), die Startzeit Millisekunden. Das Ende liegt dadurch **120 ms vor dem Anfang**. Das ist kein Fehler der TSE, sondern die unterschiedliche Auflösung zweier Felder.
+
+Folgen für den Code:
+
+- Keine Sortierung nach TSE-Zeitstempeln.
+- Keine Dauerberechnung, die auf ein positives Ergebnis angewiesen ist.
+- Wird trotzdem irgendwo eine Differenz aus TSE-Zeitstempeln gebildet — etwa für eine Anzeige —, **muss sie negative Werte vertragen** und darf daran nicht scheitern.
+- Kein `assert start <= ende` über TSE-Zeiten.
+
+### 12. Ohne Signatur kein Erfolg
+
+Ein Vorgang ohne TSE-Signatur ist **niemals** ein Erfolg. Kein Codepfad darf einen fehlenden Signaturzähler, eine fehlende Transaktionsnummer oder eine leere Signatur stillschweigend durchreichen.
+
+**`ftState` wird immer bitweise ausgewertet.** Die unteren 32 Bit sind unabhängige Flags, keine Zustandszahl. Nur der Wert `0` in den unteren Bits gilt als Normalbetrieb.
+
+- Ein gesetztes Flag ist auszuwerten und im Klartext zu melden.
+- Ein **unbekanntes** Bit ist ein Fehler, kein „ok". Was die Dokumentation nicht kennt, wird nicht durchgewinkt.
+- `EEEE_EEEE` (Error) und `FFFF_FFFF` (Fail) sind harte Fehler.
+
+Gefunden bei genau diesem Fehler im eigenen Code: Die Queue nahm Belege an, verbuchte sie und lieferte `ftState = 0x4445000000000001` zurück. Der Spike prüfte nur auf `EEEE_EEEE`/`FFFF_FFFF` und meldete „ok" — obwohl Bit 0 „Security Mechanism ausser Betrieb" bedeutet und **keine einzige Signatur** zurückkam. Nichts stürzte ab. Ein unsignierter Bon, der als Erfolg gemeldet wird, ist genau das Szenario, das bei einer Kassennachschau zum Problem wird.
+
+Wer einen Beleg abschließt, prüft deshalb aktiv, dass die Signaturdaten **da** sind — und verlässt sich nicht darauf, dass ein Fehler schon geworfen worden wäre.
+
+### 13. Die Inbetriebnahme der TSE löst niemals die Software aus
+
+Die Inbetriebnahme (Initial-operation receipt) ist ein **bewusster, einmaliger Schritt mit ausdrücklicher Bestätigung durch den Kunden**. Sie darf nicht automatisch erfolgen — nicht beim ersten Start, nicht bei der Einrichtung, nicht als stiller Reparaturversuch, wenn die Signatur fehlt.
+
+Grund: Sie erzeugt das **Inbetriebnahmedatum**, das später in die Meldung nach **§ 146a Abs. 4 AO** eingeht. Ein von der Software selbst gesetztes Datum wäre eine Angabe gegenüber der Finanzverwaltung, die der Kunde nie getroffen hat.
+
+Dasselbe gilt spiegelbildlich für die Außerbetriebnahme (Out-of-operation receipt). Beide Vorgänge gehören hinter eine ausdrückliche Bestätigung, werden im Event Log festgehalten und sind nie Teil eines automatischen Ablaufs.
 
 ---
 

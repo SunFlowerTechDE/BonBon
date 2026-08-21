@@ -41,7 +41,9 @@ import {
   isFailureState,
   signatureCaption,
   signatureData,
+  stateFlags,
   stateOf,
+  unknownStateBits,
   toHex,
 } from './fiskaltrust.js'
 import { readUint64 } from './json64.js'
@@ -108,6 +110,7 @@ interface ReceiptOptions {
   readonly reference: string
   readonly moment: string
   readonly withPayment: boolean
+  readonly withCharge?: boolean
 }
 
 function buildReceiptRequest(options: ReceiptOptions): Record<string, unknown> {
@@ -120,7 +123,8 @@ function buildReceiptRequest(options: ReceiptOptions): Record<string, unknown> {
     cbReceiptReference: options.reference,
     cbReceiptMoment: options.moment,
     ftReceiptCase: uint64(options.receiptCase),
-    cbChargeItems: [
+    cbChargeItems: (options.withCharge ?? true)
+      ? [
       {
         Position: 1,
         Quantity: CAPPUCCINO.quantity,
@@ -130,7 +134,8 @@ function buildReceiptRequest(options: ReceiptOptions): Record<string, unknown> {
         ftChargeItemCase: uint64(CAPPUCCINO.chargeItemCase),
         Moment: options.moment,
       },
-    ],
+        ]
+      : [],
     cbPayItems: options.withPayment
       ? [
           {
@@ -187,6 +192,9 @@ function printSignatures(response: ReceiptResponse): void {
 function printReceiptResponse(response: ReceiptResponse, rawText: string, verbose: boolean): void {
   const state = stateOf(response)
   console.log('  ftState:                  ' + describeState(state))
+  for (const flag of stateFlags(state)) {
+    console.log('      ' + (flag.blocksSignature ? '!! ' : '   ') + flag.text)
+  }
   console.log('  ftQueueID:                ' + (response.ftQueueID ?? '—'))
   console.log('  ftQueueItemID:            ' + (response.ftQueueItemID ?? '—'))
   const row = readUint64(response.ftQueueRow)
@@ -198,6 +206,12 @@ function printReceiptResponse(response: ReceiptResponse, rawText: string, verbos
   if (response.ftStateData !== undefined && response.ftStateData !== null) {
     console.log('  ftStateData:')
     console.log(indent(JSON.stringify(response.ftStateData, null, 2), '    '))
+  }
+
+  const unbekannt = unknownStateBits(state)
+  if (unbekannt !== 0n) {
+    console.log('      !! ftState enthaelt Bits, die die Dokumentation nicht kennt: ' + toHex(unbekannt))
+    console.log('         Das gilt als Fehler, nicht als ok (CLAUDE.md, Regel 12).')
   }
 
   if (isFailureState(state)) {
@@ -217,8 +231,86 @@ function printReceiptResponse(response: ReceiptResponse, rawText: string, verbos
 
 // --- Ablauf ----------------------------------------------------------------
 
+/**
+ * Prueft, ob die TSE tatsaechlich signiert hat.
+ *
+ * Ohne diese Pruefung meldet der Spike "Rundlauf abgeschlossen", obwohl gar
+ * keine Signatur zurueckkam — die Queue nimmt Belege naemlich auch dann an,
+ * wenn die SecurityMechanism ausser Betrieb ist. Genau diese still falsche
+ * Erfolgsmeldung waere hier der gefaehrlichste Fehler.
+ */
+function assertSigned(response: ReceiptResponse): void {
+  const gefunden = REQUESTED_FIELDS.filter(([, type]) => findSignature(response, type) !== undefined)
+  if (gefunden.length > 0) return
+
+  const flags = stateFlags(stateOf(response)).filter((f) => f.blocksSignature)
+
+  console.log('\n' + '='.repeat(78))
+  console.log('KEINE TSE-SIGNATUR IN DER ANTWORT')
+  console.log('='.repeat(78))
+  console.log('Die Queue hat den Beleg angenommen und verbucht, aber nichts signiert.')
+  console.log('Der Rundlauf ist damit NICHT gelungen — das Ziel war die Signatur.')
+  if (flags.length > 0) {
+    console.log('\nftState nennt den Grund:')
+    for (const flag of flags) console.log('  - ' + flag.text)
+  }
+  console.log('\nNaechster Schritt:')
+  console.log('  Ist die Queue noch nie in Betrieb genommen worden, fehlt der')
+  console.log('  Inbetriebnahmebeleg (Initial-operation receipt, ' + toHex(RECEIPT_CASE.initialOperation) + ').')
+  console.log('  Einmalig pro Queue:  pnpm spike --init')
+  console.log('\n  Danach mit  pnpm spike --zero  die Verbindung zur TSE testen,')
+  console.log('  dann den normalen Rundlauf erneut starten.')
+  throw new Error('Rundlauf ohne TSE-Signatur beendet')
+}
+
+/** Lebenszyklus-Beleg: Inbetriebnahme oder Nullbeleg. */
+async function runLifecycle(config: SpikeConfig, client: FiskaltrustClient): Promise<void> {
+  const istInit = config.init
+  const belegart = istInit ? RECEIPT_CASE.initialOperation : RECEIPT_CASE.zeroReceipt
+  const name = istInit ? 'Inbetriebnahmebeleg (Initial-operation)' : 'Nullbeleg (Zero-receipt)'
+
+  heading('BonBon — ' + name)
+  console.log('  Queue-URL:   ' + config.baseUrl)
+  console.log('  CashBox-ID:  ' + mask(config.cashBoxId))
+  if (istInit) {
+    console.log('\n  Dieser Beleg nimmt die SecurityMechanism samt TSE in Betrieb.')
+    console.log('  Er ist einmalig pro Queue und wird nur auf ausdrueckliches --init gesendet.')
+  } else {
+    console.log('\n  Kommunikations- und Funktionstest. Kein Umsatz, keine Position.')
+  }
+
+  // Lebenszyklus-Belege laufen laut Doku ausschliesslich im impliziten Ablauf.
+  const receiptCase = belegart | RECEIPT_CASE_FLAG.implicitTransaction
+  step(name + ' (' + toHex(receiptCase) + ')')
+
+  const request = buildReceiptRequest({
+    config,
+    receiptCase,
+    reference: newReceiptReference(),
+    moment: utcMoment(),
+    withPayment: false,
+    withCharge: false,
+  })
+  const { response, text } = await client.sign(request)
+  printReceiptResponse(response, text, config.verbose)
+  printSignatures(response)
+
+  const blockierend = stateFlags(stateOf(response)).filter((f) => f.blocksSignature)
+  heading(blockierend.length === 0 ? 'Erledigt' : 'Erledigt, aber ftState meldet weiterhin')
+  for (const flag of blockierend) console.log('  !! ' + flag.text)
+  if (blockierend.length === 0) {
+    console.log('  Die Queue meldet kein blockierendes Flag mehr.')
+    console.log('  Naechster Schritt:  pnpm spike')
+  }
+}
+
 async function run(config: SpikeConfig): Promise<void> {
   const client = new FiskaltrustClient(config)
+
+  if (config.init || config.zero) {
+    await runLifecycle(config, client)
+    return
+  }
 
   heading('BonBon — fiskaltrust-Rundlauf (M0-Spike)')
   console.log('  Queue-URL:      ' + config.baseUrl)
@@ -298,6 +390,8 @@ async function run(config: SpikeConfig): Promise<void> {
   // --- 5. Signaturdaten ---
   step('5. Signaturdaten des Abschlussbelegs')
   printSignatures(finish.response)
+
+  assertSigned(finish.response)
 
   heading('Rundlauf abgeschlossen')
   console.log('  Belegreferenz: ' + reference)

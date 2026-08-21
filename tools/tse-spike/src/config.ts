@@ -16,6 +16,10 @@ export interface SpikeConfig {
   readonly timeoutMs: number
   readonly verbose: boolean
   readonly implicit: boolean
+  /** Inbetriebnahmebeleg senden. Einmalig pro Queue, absichtlich nur per Flag. */
+  readonly init: boolean
+  /** Nullbeleg senden — Kommunikations- und Funktionstest, sonst folgenlos. */
+  readonly zero: boolean
 }
 
 export class ConfigError extends Error {
@@ -86,5 +90,7 @@ export function loadConfig(argv: readonly string[], projectRoot: string): SpikeC
     timeoutMs,
     verbose: argv.includes('--verbose') || argv.includes('-v'),
     implicit: argv.includes('--implicit'),
+    init: argv.includes('--init'),
+    zero: argv.includes('--zero'),
   }
 }
