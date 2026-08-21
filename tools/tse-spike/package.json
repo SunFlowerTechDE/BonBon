@@ -1,0 +1,14 @@
+{
+  "name": "@bonbon/tse-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "M0-Spike: vollstaendiger Vorgang gegen den lokalen fiskaltrust Launcher.",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@bonbon/core": "workspace:*"
+  }
+}

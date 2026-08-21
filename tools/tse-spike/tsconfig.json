@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Der Spike darf Node benutzen — Regel 11 und die Plattformfreiheit
+    // gelten nur fuer packages/core.
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["src", "test"]
+}
