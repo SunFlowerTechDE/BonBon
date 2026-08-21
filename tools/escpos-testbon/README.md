@@ -19,6 +19,34 @@ Alle festen Beschriftungen tragen echte Umlaute — `Rückgeld`, `außer Haus`,
 nicht, die Codepage kann sie. Das Eszett liegt auf 0xDF, also nicht im selben
 Block wie die Umlaute, und wird eigens getestet.
 
+## Belegdaten und Belegdarstellung sind getrennt
+
+Ab 2028 wird der digitale Beleg zum Standard und Papier zur Ausnahme; das
+Format kommt später über eine Rechtsverordnung. Papier ist deshalb **eine von
+mehreren Ausgabeformen**, nicht *der* Beleg (CLAUDE.md, Regel 16).
+
+```
+Beleg (@bonbon/core)          strukturiert, ohne jede Darstellung
+   │
+   ├── EscPosReceiptRenderer  heute: Bondrucker
+   ├── HtmlReceiptRenderer    später: digitaler Beleg mit QR-Code
+   └── ?                      später: das Standardformat der Verordnung
+```
+
+Im Datensatz stehen keine Zeilenumbrüche, keine Ausrichtung, keine
+Papierbreite und keine Euro-Zeichenketten. Beträge bleiben `Cents`, Zeitpunkte
+bleiben `IsoTimestamp`, Steuersätze bleiben Promille als Ganzzahl. Die
+Umrechnung nach Euro passiert ausschließlich im Renderer.
+
+**Der Umbau ist als Umbau belegt.** Vor der Trennung wurde der erzeugte Bon
+byteweise aufgenommen: 1663 Bytes, SHA256 `32028ea4…`. Nach der Trennung
+erzeugt der Renderer denselben Bon — Byte für Byte. Die Referenz liegt als
+[Fixture](test/fixtures/testbon-referenz.bin) im Repository, ein Test
+vergleicht bei jedem Lauf dagegen.
+
+Schlägt dieser Test fehl, wurde die Darstellung geändert. Dann gehört die
+Referenz neu aufgenommen, mit einem Satz im Commit, was sich geändert hat.
+
 ## Signatur und Vorgang gehoeren zusammen
 
 `baueTestbon` nimmt **einen abgeschlossenen Vorgang**, nicht Positionen und
@@ -159,8 +187,15 @@ Kein Socket in der Anwendungslogik. Der Spike kennt nur `PrinterPort`
   codepage.ts      WPC1252, wirft statt zu ersetzen
   preview.ts       Bytestrom als Text, fuer Konsole und Test
 
+@bonbon/core
+  receipt.ts       Beleg, Belegposition, Steuerausweis, TseSignatur
+                   BelegRenderer<T> — das Interface der Renderer
+
+@bonbon/ports
+  EscPosReceiptRenderer   Beleg -> ESC/POS-Bytes
+
 tools/escpos-testbon
-  testbon.ts       Bonaufbau, reine Funktion
+  testbon.ts       baut den Belegdatensatz, bindet die Signatur (Regel 14)
   main.ts          Aufruf, Ausgabe, Fehlerbehandlung
 ```
 

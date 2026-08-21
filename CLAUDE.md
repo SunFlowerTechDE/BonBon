@@ -220,6 +220,33 @@ Auflösung nach ZVT-Spezifikation, in dieser Reihenfolge:
 Bleibt es auch danach unklar, entscheidet ein Mensch: Terminal-Beleg prüfen, Tagesjournal abgleichen. Die Software rät nicht.
 
 Im M0-Spike durchgespielt: Zahlung über 9,40 € → `unknown` ohne Belegnummer. Storno auf Beleg 0001 → angenommen über 9,40 €, der Kunde **war** also belastet. Dasselbe Storno erneut → „Storno nicht möglich". Die Kette ist damit belegt, nicht behauptet.
+
+### 16. Belegdaten und Belegdarstellung sind getrennt
+
+**Was im Event Log und im Archiv liegt, ist immer der strukturierte Belegdatensatz — niemals nur eine gerenderte Form.**
+
+Ab 2028 wird der digitale Beleg zum Standard und Papier zur Ausnahme. Das Format dafür steht noch nicht fest; es kommt später über eine Rechtsverordnung. Wer bis dahin nur ESC/POS-Bytes oder PDF-Dateien aufbewahrt, kann daraus kein neues Format erzeugen — und der Kunde ist zehn Jahre aufbewahrungspflichtig (§ 147 AO).
+
+Papier ist deshalb **eine von mehreren Ausgabeformen**, nicht *der* Beleg.
+
+Der Aufbau:
+
+```
+Beleg (@bonbon/core)          strukturiert: Händlerangaben, Positionen mit
+                              Menge, Preis, Steuersatz und Verzehrart,
+                              Zahlungen, Steuerausweis je Satz,
+                              TSE-Signaturdaten, Prüfwert, Zeitpunkte
+   │
+   ├── EscPosReceiptRenderer  heute: Bondrucker
+   ├── HtmlReceiptRenderer    später: digitaler Beleg mit QR-Code
+   └── ?                      später: das Standardformat der Rechtsverordnung
+```
+
+Im Datensatz stehen **keine** formatierten Zeichenketten: keine Zeilenumbrüche, keine Ausrichtung, keine Papierbreite, keine Euro-Zeichenketten. Beträge bleiben `Cents`, Zeitpunkte bleiben `IsoTimestamp`, der Steuersatz bleibt Promille als Ganzzahl.
+
+Umrechnung nach Euro und jede Formatierung passieren ausschließlich im Renderer — das ist dieselbe Grenze wie in Regel 3, nur an einer Stelle festgemacht.
+
+Ein Renderer liest den Datensatz und erzeugt eine Ausgabe. Umgekehrt geht es nicht: aus gerenderten Bytes lässt sich der Datensatz nicht zurückgewinnen.
 ---
 
 ## Struktur

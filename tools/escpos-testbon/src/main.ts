@@ -14,6 +14,7 @@
  */
 
 import {
+  EscPosReceiptRenderer,
   MockPrinter,
   PrinterError,
   type PrinterPort,
@@ -30,21 +31,22 @@ import {
   SignaturPasstNichtError,
   type Vorgangsdaten,
   abschliessen,
-  baueTestbon,
 } from './testbon.js'
 
 // --- Bondaten --------------------------------------------------------------
 
 const BETRIEB: Betriebsdaten = {
-  betrieb: 'Café Sonnenblume',
+  name: 'Café Sonnenblume',
   strasse: 'Bäckerstraße 12',
-  ort: '66111 Saarbrücken',
+  postleitzahl: '66111',
+  ort: 'Saarbrücken',
   steuernummer: '040/123/45678',
 }
 
 const VORGANG: Vorgangsdaten = {
   belegnummer: 'ftC#T4',
-  zeitpunkt: '21.08.2026 18:58',
+  // ISO 8601 mit Offset — der Renderer macht daraus die Anzeige (Regel 11/16).
+  zeitpunkt: '2026-08-21T18:58:12+02:00',
   kasse: 'BONBON-DEV-001',
   positionen: [
     {
@@ -52,21 +54,21 @@ const VORGANG: Vorgangsdaten = {
       bezeichnung: 'Käsekuchen',
       einzelpreis: cents(390),
       steuersatzPromille: 190,
-      verzehrart: 'im Haus',
+      verzehrart: 'im-haus',
     },
     {
       menge: 1,
       bezeichnung: 'Cappuccino mit Hafermilch',
       einzelpreis: cents(380),
       steuersatzPromille: 190,
-      verzehrart: 'im Haus',
+      verzehrart: 'im-haus',
     },
     {
       menge: 2,
       bezeichnung: 'Brötchen',
       einzelpreis: cents(85),
       steuersatzPromille: 70,
-      verzehrart: 'außer Haus',
+      verzehrart: 'ausser-haus',
     },
   ],
 }
@@ -87,7 +89,7 @@ const SIGNATUR: Signaturdaten = {
   logzeit: '2026-08-21T18:58:13.000Z',
   signatur:
     'AgECBgkEAH8ABwMHAQGAEUZpbmlzaFRyYW5zYWN0aW9ugQ5CT05CT04tREVWLTAwMYInQmVsZWdeNy43MF8xLjcwXzAuMDBfMC4wMF8wLjAwXjkuNDA6QmFygw5LYXNzZW5iZWxlZy1WMYUBAAQgiIgRERFMKIRLhUheNbK2wFzKK2cZJ53Xf4TemZmZmZkwDAYKBAB/AAcBAQQBAwIBCBcNMjYwODIxMTg1ODEyWg==',
-  tseSeriennummer: 'a0a5ba77-0c80-4095-b915-e1d63e698b2f',
+  seriennummer: 'a0a5ba77-0c80-4095-b915-e1d63e698b2f',
   pruefwert: 'V0;BONBON-DEV-001;Kassenbeleg-V1;Beleg^7.70_1.70_0.00_0.00_0.00^9.40:Bar;4;8',
 }
 
@@ -160,8 +162,13 @@ async function main(): Promise<number> {
   try {
     // Vorgang und Signatur werden hier gebunden — und dabei geprueft, dass
     // sie zusammengehoeren. Danach sind sie nicht mehr zu trennen.
-    const vorgang = abschliessen(VORGANG, SIGNATUR)
-    bytes = baueTestbon(BETRIEB, vorgang, drucker.info.charactersPerLine)
+    const beleg = abschliessen(BETRIEB, VORGANG, SIGNATUR)
+    // Der Datensatz ist fertig. Erst hier entsteht eine Darstellung — heute
+    // ESC/POS, spaeter HTML oder das Standardformat (Regel 16).
+    const renderer = new EscPosReceiptRenderer({
+      charactersPerLine: drucker.info.charactersPerLine,
+    })
+    bytes = renderer.render(beleg)
   } catch (fehler) {
     console.error('\nDer Bon liess sich nicht kodieren:\n')
     if (fehler instanceof SignaturPasstNichtError) {

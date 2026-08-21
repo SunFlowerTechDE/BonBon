@@ -41,3 +41,19 @@ export {
   hashEvent,
   verifyChain,
 } from './events.js'
+
+export {
+  type Beleg,
+  type BelegRenderer,
+  type Belegposition,
+  type Haendlerangaben,
+  type Steuerausweis,
+  type TseSignatur,
+  type Verzehrart,
+  type Zahlart,
+  type Zahlung,
+  steuerKennzeichen,
+  steuersatzText,
+  verzehrartText,
+  zahlartText,
+} from './receipt.js'

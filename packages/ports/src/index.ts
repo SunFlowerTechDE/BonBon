@@ -54,6 +54,13 @@ export {
   stripCommands,
 } from './printer/preview.js'
 
+export {
+  EscPosReceiptRenderer,
+  type EscPosReceiptOptions,
+  euroText,
+  zeitpunktText,
+} from './printer/EscPosReceiptRenderer.js'
+
 export { TcpPrinter, type TcpPrinterOptions } from './printer/TcpPrinter.js'
 export { MockPrinter, type MockFailure, type MockPrinterOptions } from './printer/MockPrinter.js'
 
