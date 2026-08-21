@@ -1,0 +1,15 @@
+{
+  "name": "@bonbon/escpos-testbon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "M0-Spike: ESC/POS-Testbon gegen escpresso auf TCP 9100.",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@bonbon/core": "workspace:*",
+    "@bonbon/ports": "workspace:*"
+  }
+}

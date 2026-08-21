@@ -41,6 +41,15 @@ importers:
 
   packages/ui: {}
 
+  tools/escpos-testbon:
+    dependencies:
+      '@bonbon/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@bonbon/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
+
   tools/mock-terminal: {}
 
   tools/tse-spike:

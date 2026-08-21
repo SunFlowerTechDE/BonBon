@@ -3,5 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Interfaces der Geraeteschicht (TsePort, PrinterPort, CashDrawerPort, PaymentPort) plus Mock-Implementierungen."
+  "description": "Interfaces der Geraeteschicht (TsePort, PrinterPort, CashDrawerPort, PaymentPort) plus Mock- und Echt-Implementierungen.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
 }

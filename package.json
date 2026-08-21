@@ -14,7 +14,8 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
-    "spike": "pnpm --filter @bonbon/core run build && pnpm --filter @bonbon/tse-spike run start"
+    "spike": "pnpm --filter @bonbon/core run build && pnpm --filter @bonbon/tse-spike run start",
+    "testbon": "pnpm --filter \"./packages/**\" run build && pnpm --filter @bonbon/escpos-testbon run start"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

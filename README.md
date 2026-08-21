@@ -28,6 +28,7 @@ cp .env.example .env    # Werte aus dem fiskaltrust Portal eintragen
 | `pnpm test` | Vitest (Watch: `pnpm test:watch`) |
 | `pnpm build` | baut die Pakete unter `packages/` |
 | `pnpm spike` | fiskaltrust-Rundlauf gegen den lokalen Launcher ([Anleitung](tools/tse-spike/README.md)) |
+| `pnpm testbon` | ESC/POS-Testbon gegen escpresso auf Port 9100 ([Anleitung](tools/escpos-testbon/README.md)) |
 
 ## Struktur
 
@@ -39,6 +40,7 @@ apps/desktop/           Tauri-App                                        [Platzh
 apps/backend/           Fastify + PostgreSQL                             [Platzhalter]
 tools/mock-terminal/    ZVT-Terminalsimulator, Port 20007                [Platzhalter]
 tools/tse-spike/        fiskaltrust-Rundlauf (M0)                        [fertig]
+tools/escpos-testbon/   ESC/POS-Testbon (M0)                             [fertig]
 ```
 
 ### Was an `@bonbon/core` technisch erzwungen ist
