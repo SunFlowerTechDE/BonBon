@@ -24,23 +24,27 @@ import {
 } from '@bonbon/ports'
 import { cents } from '@bonbon/core'
 
-import { type Bondaten, baueTestbon } from './testbon.js'
+import {
+  type Betriebsdaten,
+  type Signaturdaten,
+  SignaturPasstNichtError,
+  type Vorgangsdaten,
+  abschliessen,
+  baueTestbon,
+} from './testbon.js'
 
 // --- Bondaten --------------------------------------------------------------
 
-/**
- * Die Signaturdaten stammen aus dem echten Rundlauf des tse-spike gegen den
- * lokalen fiskaltrust Launcher. Sie sind hier fest hinterlegt, weil dieser
- * Spike den Druckweg prueft, nicht die Fiskalisierung — verdrahtet werden die
- * beiden erst in M3.
- */
-const BONDATEN: Bondaten = {
+const BETRIEB: Betriebsdaten = {
   betrieb: 'Café Sonnenblume',
   strasse: 'Bäckerstraße 12',
   ort: '66111 Saarbrücken',
   steuernummer: '040/123/45678',
-  belegnummer: 'ftA#T3',
-  zeitpunkt: '21.08.2026 17:03',
+}
+
+const VORGANG: Vorgangsdaten = {
+  belegnummer: 'ftC#T4',
+  zeitpunkt: '21.08.2026 18:58',
   kasse: 'BONBON-DEV-001',
   positionen: [
     {
@@ -62,20 +66,29 @@ const BONDATEN: Bondaten = {
       bezeichnung: 'Brötchen',
       einzelpreis: cents(85),
       steuersatzPromille: 70,
-      verzehrart: 'ausser Haus',
+      verzehrart: 'außer Haus',
     },
   ],
-  signatur: {
-    transaktionsnummer: '3',
-    signaturzaehler: '6',
-    startzeit: '2026-08-21T17:03:43.120Z',
-    logzeit: '2026-08-21T17:03:43.000Z',
-    signatur:
-      'AgECBgkEAH8ABwMHAQGAEUZpbmlzaFRyYW5zYWN0aW9ugQ5CT05CT04tREVWLTAwMYInQmVsZWdeMy44MF8wLjAwXzAuMDBfMC4wMF8wLjAwXjMuODA6QmFygw5LYXNzZW5iZWxlZy1WMYUBAAQgiIgRERFMKIRLhUheNbK2wFzKK2cZJ53Xf4TemZmZmZkwDAYKBAB/AAcBAQQBAwIBBhcNMjYwODIxMTcwMzQzWg==',
-    tseSeriennummer: 'dace6975-a50d-442c-a979-dbbb887e8134',
-    pruefwert:
-      'V0;BONBON-DEV-001;Kassenbeleg-V1;Beleg^3.80_0.00_0.00_0.00_0.00^3.80:Bar;3;6',
-  },
+}
+
+/**
+ * Signatur aus einem echten Rundlauf gegen den lokalen fiskaltrust Launcher,
+ * erzeugt mit `pnpm spike --warenkorb` — also fuer genau diesen Warenkorb.
+ *
+ * Der Pruefwert weist es aus: Beleg^7.70_1.70_0.00_0.00_0.00^9.40:Bar
+ * Das sind 19 % = 7,70, 7 % = 1,70 und ein Zahlbetrag von 9,40 — dieselben
+ * Zahlen, die der Bon zeigt. `abschliessen()` prueft das beim Zusammenbauen
+ * und weigert sich sonst (CLAUDE.md, Regel 14).
+ */
+const SIGNATUR: Signaturdaten = {
+  transaktionsnummer: '4',
+  signaturzaehler: '8',
+  startzeit: '2026-08-21T18:58:12.878Z',
+  logzeit: '2026-08-21T18:58:13.000Z',
+  signatur:
+    'AgECBgkEAH8ABwMHAQGAEUZpbmlzaFRyYW5zYWN0aW9ugQ5CT05CT04tREVWLTAwMYInQmVsZWdeNy43MF8xLjcwXzAuMDBfMC4wMF8wLjAwXjkuNDA6QmFygw5LYXNzZW5iZWxlZy1WMYUBAAQgiIgRERFMKIRLhUheNbK2wFzKK2cZJ53Xf4TemZmZmZkwDAYKBAB/AAcBAQQBAwIBCBcNMjYwODIxMTg1ODEyWg==',
+  tseSeriennummer: 'a0a5ba77-0c80-4095-b915-e1d63e698b2f',
+  pruefwert: 'V0;BONBON-DEV-001;Kassenbeleg-V1;Beleg^7.70_1.70_0.00_0.00_0.00^9.40:Bar;4;8',
 }
 
 // --- Hilfen ----------------------------------------------------------------
@@ -145,9 +158,18 @@ async function main(): Promise<number> {
   console.log('\n--- Bon bauen ' + '-'.repeat(63))
   let bytes: Uint8Array
   try {
-    bytes = baueTestbon(BONDATEN, drucker.info.charactersPerLine)
+    // Vorgang und Signatur werden hier gebunden — und dabei geprueft, dass
+    // sie zusammengehoeren. Danach sind sie nicht mehr zu trennen.
+    const vorgang = abschliessen(VORGANG, SIGNATUR)
+    bytes = baueTestbon(BETRIEB, vorgang, drucker.info.charactersPerLine)
   } catch (fehler) {
     console.error('\nDer Bon liess sich nicht kodieren:\n')
+    if (fehler instanceof SignaturPasstNichtError) {
+      console.error('')
+      console.error('='.repeat(78))
+      console.error('SIGNATUR GEHOERT NICHT ZU DIESEM VORGANG')
+      console.error('='.repeat(78))
+    }
     console.error(beschreibeFehler(fehler))
     return 1
   }

@@ -29,6 +29,7 @@ export {
   CHARACTERS_PER_LINE_58MM,
   CHARACTERS_PER_LINE_80MM,
   EscPosBuilder,
+  LineTooWideError,
   align,
   beginJob,
   bold,
@@ -42,7 +43,16 @@ export {
   wrap,
 } from './printer/escpos.js'
 
-export { hexdump, previewBox, previewLines, stripCommands } from './printer/preview.js'
+export {
+  type AnalysedLine,
+  UnknownCommandError,
+  analyseLines,
+  findOverlongLines,
+  hexdump,
+  previewBox,
+  previewLines,
+  stripCommands,
+} from './printer/preview.js'
 
 export { TcpPrinter, type TcpPrinterOptions } from './printer/TcpPrinter.js'
 export { MockPrinter, type MockFailure, type MockPrinterOptions } from './printer/MockPrinter.js'

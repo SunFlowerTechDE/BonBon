@@ -104,19 +104,101 @@ export const cashDrawerPulse = (pin: 0 | 1 = 0, onTime = 50, offTime = 50): numb
 
 // --- Aufbau ----------------------------------------------------------------
 
+/** Eine Zeile passt nicht auf das Papier — im geltenden Schriftmodus. */
+export class LineTooWideError extends Error {
+  constructor(
+    readonly text: string,
+    readonly maxCharacters: number,
+    readonly widthMultiplier: number,
+  ) {
+    super(
+      'Zeile ist ' +
+        String(text.length) +
+        ' Zeichen lang, erlaubt sind ' +
+        String(maxCharacters) +
+        ' bei Breitenfaktor ' +
+        String(widthMultiplier) +
+        ': ' +
+        JSON.stringify(text),
+    )
+    this.name = 'LineTooWideError'
+  }
+}
+
 /**
  * Sammelt Befehle und Text zu einem Druckauftrag.
  *
- * Der Text laeuft immer durch `encodeWpc1252`, das bei einem nicht
- * darstellbaren Zeichen wirft. Ein Bon mit `K?sekuchen` entsteht hier also
- * gar nicht erst.
+ * Zwei Zusicherungen:
+ *
+ * 1. Der Text laeuft immer durch `encodeWpc1252`, das bei einem nicht
+ *    darstellbaren Zeichen wirft. Ein Bon mit `K?sekuchen` entsteht nicht.
+ *
+ * 2. Die nutzbare Zeilenbreite haengt vom **Schriftmodus** ab, nicht von einer
+ *    festen Zahl. In doppelter Breite passen nur halb so viele Zeichen aufs
+ *    Papier. Der Builder fuehrt den Modus mit und rechnet die Breite jedes Mal
+ *    neu aus; eine zu breite Zeile wirft.
+ *
+ * Punkt 2 ist kein Schoenheitsfehler: ohne ihn wird die Summenzeile in
+ * doppelter Breite weiter auf 48 Spalten ausgerichtet, und der wichtigste
+ * Betrag des Bons landet neben dem Papierrand.
  */
 export class EscPosBuilder {
   private readonly bytes: number[] = []
+  private widthMultiplier = 1
+  private heightMultiplier = 1
 
-  constructor(readonly charactersPerLine: number = CHARACTERS_PER_LINE_80MM) {}
+  constructor(
+    /** Zeichen pro Zeile bei einfacher Breite. */
+    readonly baseCharactersPerLine: number = CHARACTERS_PER_LINE_80MM,
+    /** Zu breite Zeilen werfen. Nur zum Untersuchen fremder Auftraege abschaltbar. */
+    private readonly strict = true,
+  ) {}
 
+  /** Zeichen, die im aktuellen Schriftmodus auf eine Zeile passen. */
+  get charactersPerLine(): number {
+    return Math.floor(this.baseCharactersPerLine / this.widthMultiplier)
+  }
+
+  get currentWidthMultiplier(): number {
+    return this.widthMultiplier
+  }
+
+  get currentHeightMultiplier(): number {
+    return this.heightMultiplier
+  }
+
+  /**
+   * Zeichengroesse setzen und den Zustand mitfuehren.
+   *
+   * Immer diese Methode benutzen, nicht `raw(textSize(...))` — sonst weiss der
+   * Builder nichts von der Aenderung. `raw()` liest die Sequenz zur Sicherheit
+   * trotzdem mit, verlassen sollte man sich darauf aber nicht.
+   */
+  size(width: 1 | 2, height: 1 | 2): this {
+    return this.raw(textSize(width, height))
+  }
+
+  /**
+   * Rohe Bytes anhaengen.
+   *
+   * Modusaendernde Sequenzen werden mitgelesen, damit die Zeilenbreite auch
+   * dann stimmt, wenn jemand den Befehl direkt durchreicht.
+   */
   raw(command: readonly number[]): this {
+    for (let i = 0; i < command.length; i += 1) {
+      if (command[i] === GS && command[i + 1] === 0x21 && command[i + 2] !== undefined) {
+        const n = command[i + 2] as number
+        this.widthMultiplier = ((n >> 4) & 0x07) + 1
+        this.heightMultiplier = (n & 0x07) + 1
+      } else if (command[i] === ESC && command[i + 1] === 0x21 && command[i + 2] !== undefined) {
+        const n = command[i + 2] as number
+        this.widthMultiplier = (n & 0x20) === 0 ? 1 : 2
+        this.heightMultiplier = (n & 0x10) === 0 ? 1 : 2
+      } else if (command[i] === ESC && command[i + 1] === 0x40) {
+        this.widthMultiplier = 1
+        this.heightMultiplier = 1
+      }
+    }
     this.bytes.push(...command)
     return this
   }
@@ -127,12 +209,15 @@ export class EscPosBuilder {
     return this
   }
 
-  /** Text mit Zeilenumbruch. */
+  /** Text mit Zeilenumbruch. Wirft, wenn er im aktuellen Modus zu breit ist. */
   line(value = ''): this {
+    if (this.strict && value.length > this.charactersPerLine) {
+      throw new LineTooWideError(value, this.charactersPerLine, this.widthMultiplier)
+    }
     return this.text(value).raw([LF])
   }
 
-  /** Eine Trennlinie ueber die volle Breite. */
+  /** Eine Trennlinie ueber die volle Breite des aktuellen Modus. */
   rule(character = '-'): this {
     return this.line(character.repeat(this.charactersPerLine))
   }
@@ -143,20 +228,21 @@ export class EscPosBuilder {
    * nichts, ein halber Artikelname auf dem Beleg waere Datenverlust.
    */
   columns(left: string, right: string, filler = ' '): this {
-    const platz = this.charactersPerLine - right.length
+    const breite = this.charactersPerLine
+    const platz = breite - right.length
     if (left.length <= platz - 1) {
       const luecke = platz - left.length
       return this.line(left + filler.repeat(Math.max(1, luecke)) + right)
     }
-    for (const teil of wrap(left, this.charactersPerLine)) this.line(teil)
-    return this.line(right.padStart(this.charactersPerLine))
+    for (const teil of wrap(left, breite)) this.line(teil)
+    return this.line(right.padStart(breite))
   }
 
   centered(value: string): this {
     return this.raw(align(1)).line(value).raw(align(0))
   }
 
-  /** Langen Text auf die Zeilenbreite umbrechen. */
+  /** Langen Text auf die aktuelle Zeilenbreite umbrechen. */
   wrapped(value: string): this {
     for (const teil of wrap(value, this.charactersPerLine)) this.line(teil)
     return this

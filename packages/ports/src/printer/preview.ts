@@ -1,52 +1,177 @@
 /**
- * Vorschau eines Druckauftrags.
+ * Auswertung eines fertigen Druckauftrags.
  *
- * Nimmt den fertigen Bytestrom und macht daraus den Text, den der Drucker
- * setzen wuerde — die Steuersequenzen werden entfernt, der Text nach WPC1252
- * zurueckgelesen.
+ * Liest den Bytestrom zurueck und liefert die Zeilen, die der Drucker setzen
+ * wuerde — **mitsamt dem Schriftmodus, der fuer jede Zeile gilt**. Das ist der
+ * springende Punkt: bei doppelter Breite passen nur halb so viele Zeichen auf
+ * die Zeile. Wer gegen eine feste Zahl prueft, uebersieht genau den Fall, in
+ * dem der wichtigste Betrag des Bons neben dem Papier landet.
  *
- * Zweck ist nicht Schoenheit, sondern Pruefbarkeit: damit laesst sich im Test
- * zusichern, dass keine Zeile breiter ist als das Papier, und auf der Konsole
- * zeigen, was tatsaechlich gesendet wird. Ein Emulator kann denselben
- * Bytestrom anders darstellen — was hier steht, ist das, was beim Geraet
- * ankommt.
+ * Der Parser ist bewusst unabhaengig vom `EscPosBuilder` geschrieben. Er
+ * vertraut dessen Buchfuehrung nicht, sondern liest die Wahrheit aus den Bytes.
+ * Damit faellt auf, wenn der Builder seinen Zustand falsch mitfuehrt.
  */
+
+const ESC = 0x1b
+const GS = 0x1d
+const LF = 0x0a
 
 /**
- * Alle Sequenzen, die dieses Paket erzeugt, mit ihrer Laenge in Bytes.
- * Die Steuerzeichen sind hier der Gegenstand, deshalb die Ausnahme von
- * `no-control-regex` — sie zu maskieren wuerde den Ausdruck unlesbar machen.
+ * Laenge der Befehle, die dieses Paket erzeugt, jeweils inklusive der
+ * Einleitung. Ein unbekannter Befehl wird nicht ueberlesen, sondern gemeldet —
+ * sonst verschiebt sich der Parser still und die Zeilenpruefung wird wertlos.
  */
-/* eslint-disable no-control-regex */
-const COMMAND_PATTERNS: readonly RegExp[] = [
-  /\x1b@/g, // ESC @      zuruecksetzen
-  /\x1bt[\s\S]/g, // ESC t n    Codepage
-  /\x1ba[\s\S]/g, // ESC a n    Ausrichtung
-  /\x1bE[\s\S]/g, // ESC E n    Fettdruck
-  /\x1b-[\s\S]/g, // ESC - n    Unterstreichen
-  /\x1bd[\s\S]/g, // ESC d n    Vorschub
-  /\x1bp[\s\S]{3}/g, // ESC p m t1 t2  Kassenlade
-  /\x1d![\s\S]/g, // GS ! n     Zeichengroesse
-  /\x1dV[\s\S]/g, // GS V m     Schnitt
-]
-/* eslint-enable no-control-regex */
+const ESC_COMMAND_LENGTH: ReadonlyMap<number, number> = new Map([
+  [0x40, 2], // ESC @        zuruecksetzen
+  [0x74, 3], // ESC t n      Codepage
+  [0x61, 3], // ESC a n      Ausrichtung
+  [0x45, 3], // ESC E n      Fettdruck
+  [0x2d, 3], // ESC - n      Unterstreichen
+  [0x64, 3], // ESC d n      Vorschub
+  [0x21, 3], // ESC ! n      Druckmodus (enthaelt auch die Groesse)
+  [0x70, 5], // ESC p m t1 t2  Kassenlade
+])
+
+const GS_COMMAND_LENGTH: ReadonlyMap<number, number> = new Map([
+  [0x21, 3], // GS ! n       Zeichengroesse
+  [0x56, 3], // GS V m       Schnitt
+])
+
+export class UnknownCommandError extends Error {
+  constructor(
+    readonly offset: number,
+    readonly bytes: readonly number[],
+  ) {
+    super(
+      'Unbekannte ESC/POS-Sequenz an Offset ' +
+        String(offset) +
+        ': ' +
+        bytes.map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join(' ') +
+        '. Der Parser muss sie kennen, sonst verschiebt sich die Zeilenpruefung.',
+    )
+    this.name = 'UnknownCommandError'
+  }
+}
+
+export interface AnalysedLine {
+  /** Der Text der Zeile, ohne Steuerzeichen. */
+  readonly text: string
+  /** Breitenfaktor, der beim Setzen dieser Zeile galt. */
+  readonly widthMultiplier: number
+  /** Hoehenfaktor — beeinflusst die Zeilenbreite nicht. */
+  readonly heightMultiplier: number
+  /** Wie viele Zeichen bei diesem Modus auf die Zeile passen. */
+  readonly maxCharacters: number
+  /** Zeilennummer im Auftrag, ab 0. */
+  readonly index: number
+}
+
+/**
+ * Zerlegt den Auftrag in Zeilen und bestimmt fuer jede den geltenden
+ * Schriftmodus.
+ *
+ * `GS ! n`: obere vier Bit Breite, untere vier Bit Hoehe (Epson).
+ * `ESC ! n`: Bit 5 doppelte Breite, Bit 4 doppelte Hoehe.
+ */
+export function analyseLines(job: Uint8Array, baseCharactersPerLine: number): AnalysedLine[] {
+  const zeilen: AnalysedLine[] = []
+  let text = ''
+  let width = 1
+  let height = 1
+  let i = 0
+
+  const zeileAbschliessen = (): void => {
+    zeilen.push({
+      text,
+      widthMultiplier: width,
+      heightMultiplier: height,
+      maxCharacters: Math.floor(baseCharactersPerLine / width),
+      index: zeilen.length,
+    })
+    text = ''
+  }
+
+  while (i < job.length) {
+    const byte = job[i] as number
+
+    if (byte === LF) {
+      zeileAbschliessen()
+      i += 1
+      continue
+    }
+
+    if (byte === ESC || byte === GS) {
+      const befehl = job[i + 1]
+      const laengen = byte === ESC ? ESC_COMMAND_LENGTH : GS_COMMAND_LENGTH
+      const laenge = befehl === undefined ? undefined : laengen.get(befehl)
+      if (laenge === undefined) {
+        throw new UnknownCommandError(i, [...job.slice(i, i + 4)])
+      }
+
+      if (byte === GS && befehl === 0x21) {
+        const n = job[i + 2] as number
+        width = ((n >> 4) & 0x07) + 1
+        height = (n & 0x07) + 1
+      } else if (byte === ESC && befehl === 0x21) {
+        const n = job[i + 2] as number
+        width = (n & 0x20) === 0 ? 1 : 2
+        height = (n & 0x10) === 0 ? 1 : 2
+      } else if (byte === ESC && befehl === 0x40) {
+        // ESC @ setzt auch die Zeichengroesse zurueck.
+        width = 1
+        height = 1
+      }
+
+      i += laenge
+      continue
+    }
+
+    text += String.fromCharCode(byte)
+    i += 1
+  }
+
+  if (text !== '') zeileAbschliessen()
+  return zeilen
+}
+
+/** Nur die Texte, ohne Modusangaben. */
+export function previewLines(job: Uint8Array, baseCharactersPerLine = 48): string[] {
+  return analyseLines(job, baseCharactersPerLine).map((z) => z.text)
+}
 
 /** Entfernt die Steuersequenzen und liefert den reinen Text. */
-export function stripCommands(job: Uint8Array): string {
-  let text = Buffer.from(job).toString('latin1')
-  for (const muster of COMMAND_PATTERNS) text = text.replace(muster, '')
-  return text
+export function stripCommands(job: Uint8Array, baseCharactersPerLine = 48): string {
+  return previewLines(job, baseCharactersPerLine).join('\n')
 }
 
-/** Der Bon als Zeilen, so wie der Drucker sie setzen wuerde. */
-export function previewLines(job: Uint8Array): string[] {
-  return stripCommands(job).split('\n')
+/**
+ * Zeilen, die fuer ihren Schriftmodus zu breit sind.
+ *
+ * Leeres Ergebnis heisst: der Auftrag passt aufs Papier. Diese Funktion ist der
+ * Kern der Zusicherung — sie kennt den Unterschied zwischen 48 Zeichen normal
+ * und 24 Zeichen in doppelter Breite.
+ */
+export function findOverlongLines(
+  job: Uint8Array,
+  baseCharactersPerLine: number,
+): AnalysedLine[] {
+  return analyseLines(job, baseCharactersPerLine).filter((z) => z.text.length > z.maxCharacters)
 }
 
-/** Der Bon in einem Rahmen der Papierbreite, fuer die Konsole. */
-export function previewBox(job: Uint8Array, charactersPerLine: number): string {
-  const rand = '+' + '-'.repeat(charactersPerLine + 2) + '+'
-  const zeilen = previewLines(job).map((z) => '| ' + z.padEnd(charactersPerLine) + ' |')
+/**
+ * Der Bon in einem Rahmen der Papierbreite, fuer die Konsole.
+ *
+ * Zeilen in doppelter Breite werden mit gesperrtem Text dargestellt, damit man
+ * in der Vorschau sieht, dass sie den doppelten Platz brauchen.
+ */
+export function previewBox(job: Uint8Array, baseCharactersPerLine: number): string {
+  const rand = '+' + '-'.repeat(baseCharactersPerLine + 2) + '+'
+  const zeilen = analyseLines(job, baseCharactersPerLine).map((z) => {
+    const dargestellt = z.widthMultiplier > 1 ? [...z.text].join(' ') : z.text
+    const zuBreit = z.text.length > z.maxCharacters
+    const inhalt = dargestellt.padEnd(baseCharactersPerLine).slice(0, baseCharactersPerLine)
+    return '| ' + inhalt + ' |' + (zuBreit ? '  <-- ZU BREIT' : '')
+  })
   return [rand, ...zeilen, rand].join('\n')
 }
 

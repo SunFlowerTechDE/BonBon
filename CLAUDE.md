@@ -164,6 +164,24 @@ Grund: Sie erzeugt das **Inbetriebnahmedatum**, das später in die Meldung nach 
 
 Dasselbe gilt spiegelbildlich für die Außerbetriebnahme (Out-of-operation receipt). Beide Vorgänge gehören hinter eine ausdrückliche Bestätigung, werden im Event Log festgehalten und sind nie Teil eines automatischen Ablaufs.
 
+
+### 14. Signatur und Vorgang sind untrennbar
+
+Eine TSE-Signatur gehört zu **genau einem** Vorgang. Auf einem Beleg dürfen niemals die Positionen des einen und die Signatur eines anderen stehen.
+
+**Das wird strukturell verhindert, nicht durch Sorgfalt.** Belegdruck, Export und Anzeige nehmen keine zwei unabhängigen Parameter für Vorgangsdaten und Signaturdaten entgegen, sondern **einen abgeschlossenen Vorgang, der seine Signatur bereits enthält**. Dieser Typ ist nur über eine Konstruktorfunktion zu bekommen, die beides bindet. Damit gibt es keine Aufrufstelle, an der sich die beiden vertauschen ließen.
+
+Die Konstruktorfunktion prüft zusätzlich, dass sie zusammenpassen. Der Prüfwert nach KassenSichV enthält die Beträge des signierten Vorgangs im Klartext:
+
+```
+V0;<Kassenseriennummer>;Kassenbeleg-V1;Beleg^<19%>_<7%>_<10,7%>_<5,5%>_<0%>^<Zahlbetrag>:<Zahlart>;<TrxNr>;<SigZähler>
+```
+
+Verglichen werden Kassenseriennummer, Transaktionsnummer, Signaturzähler, Zahlbetrag und die Summen je Steuersatz. Bei einer Abweichung wird nicht gedruckt, sondern geworfen — mit Nennung jeder einzelnen Abweichung.
+
+Ein **unlesbarer** Prüfwert gilt als Abweichung, nicht als Ausnahme. Was sich nicht nachweisen lässt, wird nicht durchgewunken (siehe Regel 12).
+
+Gefunden im M0-Spike: Der ESC/POS-Testbon zeigte drei Positionen über 9,40 €, trug im Fuß aber die Signatur eines vorherigen Vorgangs über 3,80 €. Für einen Drucktest folgenlos — im Betrieb ein schwerer Mangel, und bei einer Kassennachschau nicht erklärbar.
 ---
 
 ## Struktur

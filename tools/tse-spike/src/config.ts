@@ -20,6 +20,8 @@ export interface SpikeConfig {
   readonly init: boolean
   /** Nullbeleg senden — Kommunikations- und Funktionstest, sonst folgenlos. */
   readonly zero: boolean
+  /** Den Warenkorb des ESC/POS-Testbons buchen statt des einzelnen Cappuccinos. */
+  readonly warenkorb: boolean
 }
 
 export class ConfigError extends Error {
@@ -92,5 +94,6 @@ export function loadConfig(argv: readonly string[], projectRoot: string): SpikeC
     implicit: argv.includes('--implicit'),
     init: argv.includes('--init'),
     zero: argv.includes('--zero'),
+    warenkorb: argv.includes('--warenkorb'),
   }
 }

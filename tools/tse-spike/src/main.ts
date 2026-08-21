@@ -50,23 +50,58 @@ import { readUint64 } from './json64.js'
 
 // --- Der Vorgang -----------------------------------------------------------
 
-/** 1x Cappuccino, 3,80 EUR, Verzehr im Haus. */
-const CAPPUCCINO = {
-  description: 'Cappuccino',
-  quantity: 1,
-  unitPrice: cents(380),
-  /**
-   * Verzehr im Haus bedeutet Regelsteuersatz, also 19 %.
-   *
-   * Wichtig fuers Projekt: die TSE erfaehrt nur den Steuersatz, nicht den
-   * Grund. Warum 19 % und nicht 7 % berechnet wurden, muss unser eigener Event
-   * Log festhalten (CLAUDE.md, Regel 4). Der Spike zeigt damit auch, was die
-   * Fiskalisierung gerade *nicht* fuer uns erledigt.
-   */
+interface SpikePosition {
+  readonly menge: number
+  readonly bezeichnung: string
+  readonly einzelpreis: Cents
+  readonly chargeItemCase: bigint
+  readonly steuersatzText: string
+  readonly verzehrart: string
+}
+
+/**
+ * Die Verzehrart bestimmt den Steuersatz: im Haus 19 %, ausser Haus 7 %.
+ *
+ * Wichtig fuers Projekt: die TSE erfaehrt nur den Steuersatz, nicht den Grund.
+ * Warum 19 % und nicht 7 % berechnet wurden, muss unser eigener Event Log
+ * festhalten (CLAUDE.md, Regel 4). Der Spike zeigt damit auch, was die
+ * Fiskalisierung gerade *nicht* fuer uns erledigt.
+ */
+const CAPPUCCINO: SpikePosition = {
+  menge: 1,
+  bezeichnung: 'Cappuccino',
+  einzelpreis: cents(380),
   chargeItemCase: CHARGE_ITEM_CASE.vatNormal19,
-  vatRatePercent: '19.00',
-  consumption: 'Verzehr im Haus',
-} as const
+  steuersatzText: '19.00',
+  verzehrart: 'Verzehr im Haus',
+}
+
+/** Vorgabe: der Vorgang aus dem urspruenglichen Auftrag. */
+const WARENKORB_EINZELN: readonly SpikePosition[] = [CAPPUCCINO]
+
+/**
+ * Derselbe Warenkorb, den der ESC/POS-Testbon druckt. Damit laesst sich eine
+ * Signatur erzeugen, die zu genau diesem Beleg gehoert (CLAUDE.md, Regel 14).
+ */
+const WARENKORB_TESTBON: readonly SpikePosition[] = [
+  {
+    menge: 1,
+    bezeichnung: 'Kaesekuchen',
+    einzelpreis: cents(390),
+    chargeItemCase: CHARGE_ITEM_CASE.vatNormal19,
+    steuersatzText: '19.00',
+    verzehrart: 'Verzehr im Haus',
+  },
+  CAPPUCCINO,
+  {
+    menge: 2,
+    bezeichnung: 'Broetchen',
+    einzelpreis: cents(85),
+    chargeItemCase: CHARGE_ITEM_CASE.vatReduced7,
+    steuersatzText: '7.00',
+    verzehrart: 'ausser Haus',
+  },
+]
 
 function heading(text: string): void {
   console.log('\n' + '='.repeat(78))
@@ -111,11 +146,12 @@ interface ReceiptOptions {
   readonly moment: string
   readonly withPayment: boolean
   readonly withCharge?: boolean
+  readonly positionen: readonly SpikePosition[]
 }
 
 function buildReceiptRequest(options: ReceiptOptions): Record<string, unknown> {
-  const lineTotal = multiplyCents(CAPPUCCINO.unitPrice, CAPPUCCINO.quantity)
-  const total = sumCents([lineTotal])
+  const positionen = options.positionen
+  const total = sumCents(positionen.map((p) => multiplyCents(p.einzelpreis, p.menge)))
 
   const request: Record<string, unknown> = {
     ftCashBoxID: options.config.cashBoxId,
@@ -124,17 +160,15 @@ function buildReceiptRequest(options: ReceiptOptions): Record<string, unknown> {
     cbReceiptMoment: options.moment,
     ftReceiptCase: uint64(options.receiptCase),
     cbChargeItems: (options.withCharge ?? true)
-      ? [
-      {
-        Position: 1,
-        Quantity: CAPPUCCINO.quantity,
-        Description: CAPPUCCINO.description,
-        Amount: decimalFromCents(lineTotal),
-        VATRate: decimal(CAPPUCCINO.vatRatePercent),
-        ftChargeItemCase: uint64(CAPPUCCINO.chargeItemCase),
-        Moment: options.moment,
-      },
-        ]
+      ? positionen.map((position, index) => ({
+          Position: index + 1,
+          Quantity: position.menge,
+          Description: position.bezeichnung,
+          Amount: decimalFromCents(multiplyCents(position.einzelpreis, position.menge)),
+          VATRate: decimal(position.steuersatzText),
+          ftChargeItemCase: uint64(position.chargeItemCase),
+          Moment: options.moment,
+        }))
       : [],
     cbPayItems: options.withPayment
       ? [
@@ -290,6 +324,7 @@ async function runLifecycle(config: SpikeConfig, client: FiskaltrustClient): Pro
     moment: utcMoment(),
     withPayment: false,
     withCharge: false,
+    positionen: [],
   })
   const { response, text } = await client.sign(request)
   printReceiptResponse(response, text, config.verbose)
@@ -338,6 +373,9 @@ async function run(config: SpikeConfig): Promise<void> {
     }
   }
 
+  const warenkorb = config.warenkorb ? WARENKORB_TESTBON : WARENKORB_EINZELN
+  console.log('  Warenkorb:      ' + (config.warenkorb ? 'Testbon (3 Positionen)' : 'einzeln (1x Cappuccino)'))
+
   const reference = newReceiptReference()
   console.log('\n  cbReceiptReference fuer diesen Vorgang: ' + reference)
 
@@ -350,6 +388,7 @@ async function run(config: SpikeConfig): Promise<void> {
       reference,
       moment: utcMoment(),
       withPayment: false,
+      positionen: warenkorb,
     })
     const start = await client.sign(startRequest)
     printReceiptResponse(start.response, start.text, config.verbose)
@@ -361,15 +400,29 @@ async function run(config: SpikeConfig): Promise<void> {
     console.log('  Flag: Implicit Transaction ' + toHex(RECEIPT_CASE_FLAG.implicitTransaction))
   }
 
-  // --- 3. Position ---
-  step('3. Position')
-  const lineTotal = multiplyCents(CAPPUCCINO.unitPrice, CAPPUCCINO.quantity)
-  console.log('  ' + String(CAPPUCCINO.quantity) + 'x ' + CAPPUCCINO.description)
-  console.log('  Einzelpreis:   ' + euro(CAPPUCCINO.unitPrice) + '   (intern ' + String(CAPPUCCINO.unitPrice) + ' Cent)')
-  console.log('  Summe:         ' + euro(lineTotal) + '   (intern ' + String(lineTotal) + ' Cent)')
-  console.log('  Steuersatz:    ' + CAPPUCCINO.vatRatePercent + ' %  (' + CAPPUCCINO.consumption + ')')
-  console.log('  ftChargeItemCase: ' + toHex(CAPPUCCINO.chargeItemCase))
-  console.log('\n  Hinweis: Die Position reist in cbChargeItems mit dem Beleg —')
+  // --- 3. Positionen ---
+  step('3. Positionen')
+  for (const position of warenkorb) {
+    const summe = multiplyCents(position.einzelpreis, position.menge)
+    console.log(
+      '  ' +
+        String(position.menge) +
+        'x ' +
+        position.bezeichnung.padEnd(14) +
+        euro(summe).padStart(9) +
+        '   a ' +
+        euro(position.einzelpreis) +
+        '   ' +
+        position.steuersatzText +
+        ' %  ' +
+        position.verzehrart,
+    )
+    console.log('     ftChargeItemCase: ' + toHex(position.chargeItemCase))
+  }
+  const bonSumme = sumCents(warenkorb.map((p) => multiplyCents(p.einzelpreis, p.menge)))
+  console.log('  ' + 'Summe'.padEnd(16) + euro(bonSumme).padStart(9) + '   (intern ' + String(bonSumme) + ' Cent)')
+  console.log('')
+  console.log('  Hinweis: Die Positionen reisen in cbChargeItems mit dem Beleg —')
   console.log('  fiskaltrust kennt keinen eigenen Aufruf zum Buchen einer Zeile.')
 
   // --- 4. FinishTransaction ---
@@ -383,6 +436,7 @@ async function run(config: SpikeConfig): Promise<void> {
     reference,
     moment: utcMoment(),
     withPayment: true,
+    positionen: warenkorb,
   })
   const finish = await client.sign(finishRequest)
   printReceiptResponse(finish.response, finish.text, config.verbose)
