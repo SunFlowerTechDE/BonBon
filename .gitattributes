@@ -1,0 +1,19 @@
+# Einheitliche Zeilenenden. Der Client laeuft auf Windows, das Backend auf
+# Linux — im Repository steht LF, ausgecheckt wird plattformueblich.
+* text=auto eol=lf
+
+# Windows-Skripte brauchen CRLF, sonst startet cmd.exe sie nicht.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaerdateien nie anfassen.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Lockfile beim Merge nicht zeilenweise zusammenfuehren.
+pnpm-lock.yaml -diff merge=binary linguist-generated=true

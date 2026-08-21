@@ -1,0 +1,7 @@
+{
+  "name": "@bonbon/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fastify + PostgreSQL, Hosting in DE/EU."
+}

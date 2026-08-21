@@ -1,0 +1,7 @@
+{
+  "name": "@bonbon/ports",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interfaces der Geraeteschicht (TsePort, PrinterPort, CashDrawerPort, PaymentPort) plus Mock-Implementierungen."
+}

@@ -1,0 +1,47 @@
+# Geheimnisse — Regel: .env steht hier VOR dem ersten Commit (CLAUDE.md)
+.env
+.env.*
+!.env.example
+
+# Interne Projektunterlagen — gehoeren nicht in ein oeffentliches Repository.
+# Liegen weiterhin lokal im Ordner, Git fasst sie nur nicht mehr an.
+BonBonDesignReview.md
+BonBonErsterAuftragClaudeCode.md
+
+# Abhaengigkeiten
+node_modules/
+.pnpm-store/
+
+# Build-Ausgaben
+dist/
+build/
+target/
+*.tsbuildinfo
+
+# Tauri / Rust
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# Test- und Werkzeug-Caches
+coverage/
+.vitest/
+.eslintcache
+
+# Lokale Daten (SQLite Event Log)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*

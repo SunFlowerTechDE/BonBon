@@ -1,0 +1,7 @@
+{
+  "name": "@bonbon/mock-terminal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ZVT-Terminalsimulator auf Port 20007."
+}

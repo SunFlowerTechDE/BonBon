@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Kein DOM, keine Node-Typen: @bonbon/core laeuft im Webview UND im Backend.
+    // Ein Zugriff auf window, document, fs oder process faellt hier schon beim
+    // Typecheck durch, nicht erst zur Laufzeit (CLAUDE.md, Struktur).
+    "lib": ["ES2022"],
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["src", "test"]
+}
