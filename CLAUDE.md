@@ -122,6 +122,8 @@ Der Grund ist kein Stilempfinden: Bonberechnung und Event Log müssen determinis
 
 `new Date('2026-08-21T10:15:00+02:00')` und `Date.parse(…)` bleiben erlaubt — das ist Umrechnung, nicht Uhrablesen.
 
+**Die TSE-Seriennummer ist keine Konstante.** Bei der InMemory-TSE der Sandbox wechselt sie mit jedem Neustart des Launchers — im M0-Spike erst `dace6975-…`, nach einem Neustart `a0a5ba77-…`. **Kein Test darf auf eine feste Seriennummer prüfen.** Getestet wird, *dass* eine da ist und auf dem Beleg steht, nicht *welche*. Dasselbe gilt für Transaktionsnummer und Signaturzähler: sie zählen je Queue hoch und sind nach jedem Lauf andere.
+
 **Schaltsekunde:** `IsoTimestamp` lässt `23:59:60` zu, weil ISO 8601 sie kennt und ein gültiger TSE-Zeitstempel nicht abgewiesen werden soll. `Date` kennt sie nicht — `Date.parse('2016-12-31T23:59:60Z')` liefert `NaN`. **Jede Umwandlung von `IsoTimestamp` nach `Date` muss den Fall deshalb ausdrücklich behandeln: entweder ablehnen oder `:60` auf `:59.999` normalisieren.** Stillschweigend durchreichen ist der eine verbotene Weg — sonst steht ein `Invalid Date` im Event Log, und das fällt erst beim Export auf.
 
 **TSE-Zeitstempel sind keine Uhr für Reihenfolge oder Dauer.** Sie dürfen **niemals** zur Bestimmung von Reihenfolge oder Dauer verwendet werden. Die Reihenfolge der Ereignisse ergibt sich ausschließlich aus der lückenlosen Sequenznummer je Gerät (Regel 2).
@@ -141,6 +143,15 @@ Folgen für den Code:
 - Keine Dauerberechnung, die auf ein positives Ergebnis angewiesen ist.
 - Wird trotzdem irgendwo eine Differenz aus TSE-Zeitstempeln gebildet — etwa für eine Anzeige —, **muss sie negative Werte vertragen** und darf daran nicht scheitern.
 - Kein `assert start <= ende` über TSE-Zeiten.
+
+Im M0-Spike zweimal gemessen, mit **entgegengesetztem** Ergebnis:
+
+```
+Lauf 1:  Beginn 17:03:43.120Z   Logzeit 17:03:43.000Z   Ende 120 ms VOR dem Start
+Lauf 2:  Beginn 18:58:12.878Z   Logzeit 18:58:13.000Z   Ende 122 ms nach dem Start
+```
+
+Die Reihenfolge ist also nicht einmal stabil falsch — sie hängt davon ab, wo die Sekunde gerade steht. Wer daraus eine Dauer bildet, bekommt mal ein positives, mal ein negatives Ergebnis für denselben Vorgang.
 
 ### 12. Ohne Signatur kein Erfolg
 
@@ -182,6 +193,33 @@ Verglichen werden Kassenseriennummer, Transaktionsnummer, Signaturzähler, Zahlb
 Ein **unlesbarer** Prüfwert gilt als Abweichung, nicht als Ausnahme. Was sich nicht nachweisen lässt, wird nicht durchgewunken (siehe Regel 12).
 
 Gefunden im M0-Spike: Der ESC/POS-Testbon zeigte drei Positionen über 9,40 €, trug im Fuß aber die Signatur eines vorherigen Vorgangs über 3,80 €. Für einen Drucktest folgenlos — im Betrieb ein schwerer Mangel, und bei einer Kassennachschau nicht erklärbar.
+
+### 15. Eine Kartenzahlung ohne eindeutiges Ergebnis gilt nie als bezahlt
+
+Dieselbe Regel wie bei der TSE-Signatur (Regel 12), nur teurer: Bei der Signatur fehlt ein Beweis, bei der Kartenzahlung fehlt womöglich Geld.
+
+Der Ausgang einer Kartenzahlung hat **vier** Zustände, nicht zwei:
+
+| | Kunde hat bezahlt? | Kasse tut |
+|---|---|---|
+| `approved` | ja | Bon als bezahlt abschließen |
+| `declined` | **sicher nicht** | Bon bleibt offen, andere Zahlart möglich |
+| `aborted` | **sicher nicht** | wie `declined` |
+| `unknown` | **nicht feststellbar** | weder noch — erst auflösen |
+
+`unknown` darf nicht mit `declined` zusammengelegt werden. „Abgelehnt" heißt, der Kunde hat sicher nicht bezahlt. „Unbekannt" heißt, wir wissen es nicht — und diese beiden verlangen entgegengesetztes Verhalten. Ein `if (approved) … else …` ist an dieser Stelle immer falsch.
+
+**Der Fall, für den das Mock-Terminal existiert:** Das Terminal autorisiert beim Netzbetreiber, dann reißt die Verbindung ab, bevor die Status-Information bei der Kasse ankommt. Der Kunde ist belastet, die Kasse weiß nichts davon.
+
+Auflösung nach ZVT-Spezifikation, in dieser Reihenfolge:
+
+1. **Status-Information erneut anfordern** — negative Quittung `84 9C` („Repeat Statusinfo"). Der günstigste Fall, es wird nichts rückgängig gemacht.
+2. **Nachfragen** — `05 01` Status-Enquiry.
+3. **Stornieren** — `06 30` Reversal mit `87<receipt-no>`. Der sichere Weg, wenn 1 und 2 nichts ergeben: lieber eine Zahlung stornieren, die nie stattgefunden hat — das Terminal antwortet dann schlicht „Storno nicht möglich" —, als eine erfolgte Belastung zu übersehen.
+
+Bleibt es auch danach unklar, entscheidet ein Mensch: Terminal-Beleg prüfen, Tagesjournal abgleichen. Die Software rät nicht.
+
+Im M0-Spike durchgespielt: Zahlung über 9,40 € → `unknown` ohne Belegnummer. Storno auf Beleg 0001 → angenommen über 9,40 €, der Kunde **war** also belastet. Dasselbe Storno erneut → „Storno nicht möglich". Die Kette ist damit belegt, nicht behauptet.
 ---
 
 ## Struktur

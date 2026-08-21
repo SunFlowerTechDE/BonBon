@@ -37,7 +37,11 @@ importers:
 
   packages/core: {}
 
-  packages/ports: {}
+  packages/ports:
+    dependencies:
+      '@bonbon/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/ui: {}
 
@@ -50,13 +54,29 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ports
 
-  tools/mock-terminal: {}
+  tools/mock-terminal:
+    dependencies:
+      '@bonbon/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@bonbon/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
 
   tools/tse-spike:
     dependencies:
       '@bonbon/core':
         specifier: workspace:*
         version: link:../../packages/core
+
+  tools/zvt-spike:
+    dependencies:
+      '@bonbon/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@bonbon/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
 
 packages:
 

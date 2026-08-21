@@ -1,9 +1,9 @@
 {
-  "name": "@bonbon/mock-terminal",
+  "name": "@bonbon/zvt-spike",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "ZVT-Terminalsimulator auf Port 20007 mit umschaltbaren Fehlerbildern.",
+  "description": "M0-Spike: Kartenzahlung gegen das ZVT-Mock-Terminal.",
   "scripts": {
     "start": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"

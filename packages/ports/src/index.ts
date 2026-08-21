@@ -56,3 +56,53 @@ export {
 
 export { TcpPrinter, type TcpPrinterOptions } from './printer/TcpPrinter.js'
 export { MockPrinter, type MockFailure, type MockPrinterOptions } from './printer/MockPrinter.js'
+
+// --- Kartenzahlung ---------------------------------------------------------
+
+export {
+  PaymentError,
+  UnresolvedPaymentError,
+  assertSettled,
+  type PaymentOutcome,
+  type PaymentPort,
+  type PaymentProgress,
+  type PaymentRequest,
+  type PaymentTerminalInfo,
+} from './payment/PaymentPort.js'
+
+export {
+  ACK,
+  CONFIG_BYTE_WITH_INTERMEDIATE_STATUS,
+  CURRENCY_EUR,
+  DEFAULT_PASSWORD,
+  ECR_COMMAND,
+  INTERMEDIATE_STATUS,
+  INTERMEDIATE_TEXT,
+  PT_COMMAND,
+  RESULT_CODE,
+  RESULT_TEXT,
+  intermediateText,
+  isAbort,
+  isPositiveAck,
+  resultText,
+} from './payment/zvt/constants.js'
+
+export {
+  BMP_LENGTH,
+  ZvtProtocolError,
+  type Apdu,
+  type Bitmap,
+  type DecodedApdu,
+  buildBitmaps,
+  decodeAmount,
+  decodeApdu,
+  decodeBcd,
+  encodeAmount,
+  encodeApdu,
+  encodeBcd,
+  findBitmap,
+  parseBitmaps,
+  toHex,
+} from './payment/zvt/protocol.js'
+
+export { ZvtPaymentTerminal, type ZvtPaymentOptions } from './payment/ZvtPaymentTerminal.js'
