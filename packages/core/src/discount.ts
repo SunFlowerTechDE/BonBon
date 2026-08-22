@@ -46,6 +46,37 @@
  * Ein Rabatt von 100 % ergibt damit exakt null: die kumulierten Werte sind
  * schon ganzzahlig, das Runden ist die Identität, und jeder Anteil ist genau
  * die Bemessungsgrundlage seines Satzes.
+ *
+ * ## Was das kostet: bis zu ein voller Cent je Anteil
+ *
+ * Nicht ein halber. Das ist kein Fehler, sondern der Preis der Konstruktion —
+ * und es muss hier stehen, damit es später niemand für einen hält.
+ *
+ * Der Anteil ist eine **Differenz zweier gerundeter Werte**:
+ *
+ *     Anteil_k − exakt_k = (runde(C_k) − C_k) − (runde(C_{k−1}) − C_{k−1})
+ *
+ * Der Rundungsfehler eines einzelnen Werts liegt in (−½, +½]. Die Differenz
+ * zweier solcher Fehler liegt damit in (−1, +1) — **offen**, der volle Cent
+ * wird also nicht erreicht, aber beliebig genau angenähert. Nachgerechnet über
+ * alle Grundlagen bis 3,00 € und alle Prozentsätze in Hundertstelschritten
+ * beträgt die größte Abweichung **0,999 Cent**:
+ *
+ *     Grundlage 2,17 € (Satz A) und 2,83 € (Satz B), Rabatt 94,70 %
+ *     Anteil B: 2,69 €   exakt wären 2,680010 €
+ *
+ * Wichtig ist der Vergleich: bei einer **Einzelrundung** je Satz wäre die
+ * Abweichung auf ±½ Cent begrenzt — dafür summierten sich die Anteile dann
+ * nicht mehr exakt zum Gesamtrabatt.
+ *
+ * **Für einen Kassenbon ist das der richtige Tausch.** Ein Bon, dessen
+ * Rabattzeilen sich nicht zur ausgewiesenen Rabattsumme addieren, ist bei
+ * einer Prüfung nicht erklärbar. Ein einzelner Steuersatz, dessen Anteil um
+ * einen Cent statt um einen halben von der reinen Verhältnisrechnung abweicht,
+ * ist es sehr wohl — die Summe stimmt, und die Zuordnung ist nachvollziehbar.
+ *
+ * Ein Beispiel, an dem der volle Cent auftritt, steht im Test
+ * „zeigt den Fall, in dem ein Anteil um einen vollen Cent abweicht".
  */
 
 import { type Cents, addCents, cents, negateCents } from './money.js'

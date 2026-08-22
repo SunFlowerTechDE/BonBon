@@ -7,6 +7,7 @@ import {
   type Kontext,
   STEUERSATZ,
   type SaleEventData,
+  type Steuersatzregel,
   VOLLER_RABATT,
   aendereMenge,
   aktiveZeilen,
@@ -27,6 +28,7 @@ import {
   schliesseBonAb,
   starteBon,
   stornierePosition,
+  wechsleVerzehrart,
   steuersumme,
   bruttosumme,
 } from '../src/index.js'
@@ -40,17 +42,27 @@ function kontext(startNummer = 1): Kontext {
   }
 }
 
+/**
+ * Steuersatz als Funktion aus (Produkt, Verzehrart, Datum) — Regel 4.
+ *
+ * Speisen und Getraenke: im Haus 19 %, ausser Haus 7 %. Alkohol immer 19 %.
+ */
+const regel: Steuersatzregel = (artikelId, verzehrart) => {
+  if (artikelId === 'BIER') return STEUERSATZ.regel
+  return verzehrart === 'im-haus' ? STEUERSATZ.regel : STEUERSATZ.ermaessigt
+}
+
 const KAESEKUCHEN = {
+  artikelId: 'KUCHEN',
   bezeichnung: 'Käsekuchen',
   menge: 1,
   einzelpreis: cents(390),
-  steuersatzPromille: STEUERSATZ.regel,
 }
 const BROETCHEN = {
+  artikelId: 'BROETCHEN',
   bezeichnung: 'Brötchen',
   menge: 2,
   einzelpreis: cents(85),
-  steuersatzPromille: STEUERSATZ.ermaessigt,
 }
 
 /** Baut einen Bon aus einer Folge von Erzeugerschritten. */
@@ -88,45 +100,47 @@ describe('Bon aus Ereignissen', () => {
     const k = kontext()
     const start = starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')
     const bon = bonAusEreignissen([start])
-    const fremd = { ...fuegePositionHinzu(bon, k, KAESEKUCHEN), saleId: 'BON-2' }
+    const fremd = { ...fuegePositionHinzu(bon, k, KAESEKUCHEN, regel), saleId: 'BON-2' }
     expect(() => bonAusEreignissen([start, fremd])).toThrow(/anderen Bon/)
   })
 
   it('ist eine reine Faltung — dieselben Ereignisse ergeben denselben Bon', () => {
-    const { ereignisse } = baue((bon, k) => [fuegePositionHinzu(bon, k, KAESEKUCHEN)])
+    const { ereignisse } = baue((bon, k) => [fuegePositionHinzu(bon, k, KAESEKUCHEN, regel)])
     expect(bonAusEreignissen(ereignisse)).toEqual(bonAusEreignissen(ereignisse))
   })
 })
 
 describe('Positionen', () => {
   it('fuegt eine Position hinzu', () => {
-    const { bon } = baue((b, k) => [fuegePositionHinzu(b, k, KAESEKUCHEN)])
+    const { bon } = baue((b, k) => [fuegePositionHinzu(b, k, KAESEKUCHEN, regel)])
     expect(bon.zeilen).toHaveLength(1)
     expect(bon.zeilen[0]?.bezeichnung).toBe('Käsekuchen')
     expect(gesamtbetrag(bon)).toBe(390)
   })
 
   it('rechnet Menge mal Einzelpreis', () => {
-    const { bon } = baue((b, k) => [fuegePositionHinzu(b, k, BROETCHEN)])
+    const { bon } = baue((b, k) => [fuegePositionHinzu(b, k, BROETCHEN, regel)])
     expect(bonZeilensumme(bon.zeilen[0] as never)).toBe(170)
   })
 
   it('laesst negative Mengen zu — Warenruecknahme (DSFinV-K 4.2.5)', () => {
     const { bon } = baue((b, k) => [
-      fuegePositionHinzu(b, k, { ...KAESEKUCHEN, menge: -1 }),
+      fuegePositionHinzu(b, k, { ...KAESEKUCHEN, menge: -1 }, regel),
     ])
     expect(gesamtbetrag(bon)).toBe(-390)
   })
 
   it('weist Menge null ab', () => {
     const { bon } = baue(() => [])
-    expect(() => fuegePositionHinzu(bon, kontext(), { ...KAESEKUCHEN, menge: 0 })).toThrow(BonFehler)
+    expect(() =>
+      fuegePositionHinzu(bon, kontext(), { ...KAESEKUCHEN, menge: 0 }, regel),
+    ).toThrow(BonFehler)
   })
 
   it('storniert eine Position, ohne sie zu entfernen', () => {
     // Regel 1: keine stille Aenderung. Die Zeile bleibt stehen.
     const { bon } = baue((b, k) => {
-      const hinzu = fuegePositionHinzu(b, k, KAESEKUCHEN)
+      const hinzu = fuegePositionHinzu(b, k, KAESEKUCHEN, regel)
       const nachHinzu = bonAusEreignissen([
         ...[starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')],
         hinzu,
@@ -141,7 +155,7 @@ describe('Positionen', () => {
   })
 
   it('verlangt einen Grund fuer das Storno', () => {
-    const { bon } = baue((b, k) => [fuegePositionHinzu(b, k, KAESEKUCHEN)])
+    const { bon } = baue((b, k) => [fuegePositionHinzu(b, k, KAESEKUCHEN, regel)])
     expect(() => stornierePosition(bon, kontext(), bon.zeilen[0]?.lineId ?? '', '   ')).toThrow(
       /Grund/,
     )
@@ -152,7 +166,7 @@ describe('Positionen', () => {
     const start = starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')
     let ereignisse: SaleEventData[] = [start]
     let bon = bonAusEreignissen(ereignisse)
-    const hinzu = fuegePositionHinzu(bon, k, KAESEKUCHEN)
+    const hinzu = fuegePositionHinzu(bon, k, KAESEKUCHEN, regel)
     ereignisse = [...ereignisse, hinzu]
     bon = bonAusEreignissen(ereignisse)
     const storno = stornierePosition(bon, k, hinzu.lineId, 'Irrtum')
@@ -166,7 +180,7 @@ describe('Positionen', () => {
     const start = starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')
     let ereignisse: SaleEventData[] = [start]
     let bon = bonAusEreignissen(ereignisse)
-    const hinzu = fuegePositionHinzu(bon, k, BROETCHEN)
+    const hinzu = fuegePositionHinzu(bon, k, BROETCHEN, regel)
     ereignisse = [...ereignisse, hinzu]
     bon = bonAusEreignissen(ereignisse)
 
@@ -184,7 +198,7 @@ describe('Positionen', () => {
 
 describe('Verzehrart', () => {
   it('erbt die Verzehrart des Bons', () => {
-    const { bon, ereignisse } = baue((b, k) => [fuegePositionHinzu(b, k, KAESEKUCHEN)])
+    const { bon, ereignisse } = baue((b, k) => [fuegePositionHinzu(b, k, KAESEKUCHEN, regel)])
     expect(bon.zeilen[0]?.verzehrart).toBe('im-haus')
     expect(bon.zeilen[0]?.verzehrartQuelle).toBe('bon')
     const hinzu = ereignisse[1]
@@ -193,7 +207,7 @@ describe('Verzehrart', () => {
 
   it('laesst sich je Position ueberschreiben', () => {
     const { bon } = baue((b, k) => [
-      fuegePositionHinzu(b, k, { ...KAESEKUCHEN, verzehrart: 'ausser-haus' }),
+      fuegePositionHinzu(b, k, { ...KAESEKUCHEN, verzehrart: 'ausser-haus' }, regel),
     ])
     expect(bon.zeilen[0]?.verzehrart).toBe('ausser-haus')
     expect(bon.zeilen[0]?.verzehrartQuelle).toBe('position')
@@ -204,8 +218,8 @@ describe('Verzehrart', () => {
     // Steuersatz galt. "ausser-haus, weil an dieser Position abweichend
     // gesetzt" ist etwas anderes als "ausser-haus, weil der ganze Bon so ist".
     const { ereignisse } = baue((b, k) => [
-      fuegePositionHinzu(b, k, KAESEKUCHEN),
-      fuegePositionHinzu(b, k, { ...BROETCHEN, verzehrart: 'ausser-haus' }),
+      fuegePositionHinzu(b, k, KAESEKUCHEN, regel),
+      fuegePositionHinzu(b, k, { ...BROETCHEN, verzehrart: 'ausser-haus' }, regel),
     ])
     const zeilen = ereignisse.filter((e) => e.type === 'LineAdded')
     expect(zeilen[0]).toMatchObject({ verzehrart: 'im-haus', verzehrartQuelle: 'bon' })
@@ -214,7 +228,7 @@ describe('Verzehrart', () => {
 
   it('gilt als vom Bon geerbt, wenn sie zufaellig gleich ist', () => {
     const { bon } = baue((b, k) => [
-      fuegePositionHinzu(b, k, { ...KAESEKUCHEN, verzehrart: 'im-haus' }),
+      fuegePositionHinzu(b, k, { ...KAESEKUCHEN, verzehrart: 'im-haus' }, regel),
     ])
     expect(bon.zeilen[0]?.verzehrartQuelle).toBe('bon')
   })
@@ -226,8 +240,13 @@ describe('Rabatte auf dem Bon', () => {
     const start = starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')
     let ereignisse: SaleEventData[] = [start]
     let bon = bonAusEreignissen(ereignisse)
-    for (const p of [{ ...KAESEKUCHEN, einzelpreis: cents(770) }, { ...BROETCHEN, menge: 1, einzelpreis: cents(170) }]) {
-      const e = fuegePositionHinzu(bon, k, p)
+    // Zwei Steuersaetze auf einem Bon: die zweite Position ist ausdruecklich
+    // "ausser Haus" und faellt damit unter den ermaessigten Satz (Regel 4).
+    for (const p of [
+      { ...KAESEKUCHEN, einzelpreis: cents(770) },
+      { ...BROETCHEN, menge: 1, einzelpreis: cents(170), verzehrart: 'ausser-haus' as const },
+    ]) {
+      const e = fuegePositionHinzu(bon, k, p, regel)
       ereignisse = [...ereignisse, e]
       bon = bonAusEreignissen(ereignisse)
     }
@@ -321,7 +340,7 @@ describe('Zahlung und Abschluss', () => {
     const start = starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')
     let ereignisse: SaleEventData[] = [start]
     let bon = bonAusEreignissen(ereignisse)
-    const e = fuegePositionHinzu(bon, k, KAESEKUCHEN)
+    const e = fuegePositionHinzu(bon, k, KAESEKUCHEN, regel)
     ereignisse = [...ereignisse, e]
     bon = bonAusEreignissen(ereignisse)
     const z = nimmZahlung(bon, k, 'bar', cents(zahlbetrag))
@@ -348,7 +367,7 @@ describe('Zahlung und Abschluss', () => {
     const start = starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')
     let ereignisse: SaleEventData[] = [start]
     let bon = bonAusEreignissen(ereignisse)
-    const e = fuegePositionHinzu(bon, k, KAESEKUCHEN)
+    const e = fuegePositionHinzu(bon, k, KAESEKUCHEN, regel)
     ereignisse = [...ereignisse, e]
     bon = bonAusEreignissen(ereignisse)
     ereignisse = [
@@ -365,7 +384,7 @@ describe('Zahlung und Abschluss', () => {
     const { bon, ereignisse } = bezahlterBon(390)
     const ende = schliesseBonAb(bon, kontext(9))
     const abgeschlossen = bonAusEreignissen([...ereignisse, ende])
-    const weitere = fuegePositionHinzu(abgeschlossen, kontext(19), BROETCHEN)
+    const weitere = fuegePositionHinzu(abgeschlossen, kontext(19), BROETCHEN, regel)
     expect(() => bonAusEreignissen([...ereignisse, ende, weitere])).toThrow(/abgeschlossen/)
   })
 
@@ -386,7 +405,7 @@ describe('Eigenschaften ueber beliebige Bons', () => {
     bezeichnung: fc.constantFrom('Kaffee', 'Kuchen', 'Brötchen'),
     menge: fc.integer({ min: -5, max: 5 }).filter((n) => n !== 0),
     einzelpreis: fc.integer({ min: 1, max: 5000 }).map((n) => cents(n)),
-    steuersatzPromille: fc.constantFrom(STEUERSATZ.regel, STEUERSATZ.ermaessigt),
+    artikelId: fc.constantFrom('KUCHEN', 'BROETCHEN', 'BIER'),
   })
 
   it('der Steuerausweis geht immer auf', () => {
@@ -399,7 +418,7 @@ describe('Eigenschaften ueber beliebige Bons', () => {
           let ereignisse: SaleEventData[] = [starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')]
           let bon = bonAusEreignissen(ereignisse)
           for (const p of positionen) {
-            const e = fuegePositionHinzu(bon, k, p)
+            const e = fuegePositionHinzu(bon, k, p, regel)
             ereignisse = [...ereignisse, e]
             bon = bonAusEreignissen(ereignisse)
           }
@@ -428,7 +447,7 @@ describe('Eigenschaften ueber beliebige Bons', () => {
         let bon = bonAusEreignissen(ereignisse)
         const ids: string[] = []
         for (const p of positionen) {
-          const e = fuegePositionHinzu(bon, k, p)
+          const e = fuegePositionHinzu(bon, k, p, regel)
           ids.push(e.lineId)
           ereignisse = [...ereignisse, e]
           bon = bonAusEreignissen(ereignisse)
@@ -454,7 +473,7 @@ describe('Eigenschaften ueber beliebige Bons', () => {
         let ereignisse: SaleEventData[] = [starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')]
         let bon = bonAusEreignissen(ereignisse)
         for (const p of positionen) {
-          const e = fuegePositionHinzu(bon, k, p)
+          const e = fuegePositionHinzu(bon, k, p, regel)
           ereignisse = [...ereignisse, e]
           bon = bonAusEreignissen(ereignisse)
         }
@@ -463,5 +482,115 @@ describe('Eigenschaften ueber beliebige Bons', () => {
         expect(ausBasis).toBe(ausZeilen)
       }),
     )
+  })
+})
+
+describe('Verzehrart des Bons umschalten', () => {
+  function bonMitDreiZeilen(): { bon: Bon; ereignisse: SaleEventData[]; k: Kontext } {
+    const k = kontext()
+    let ereignisse: SaleEventData[] = [starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')]
+    let bon = bonAusEreignissen(ereignisse)
+    for (const p of [
+      KAESEKUCHEN,
+      { ...BROETCHEN, menge: 1 },
+      // Diese Zeile wurde ausdruecklich abweichend gesetzt.
+      { artikelId: 'KUCHEN', bezeichnung: 'Kuchen to go', menge: 1, einzelpreis: cents(300), verzehrart: 'ausser-haus' as const },
+    ]) {
+      const e = fuegePositionHinzu(bon, k, p, regel)
+      ereignisse = [...ereignisse, e]
+      bon = bonAusEreignissen(ereignisse)
+    }
+    return { bon, ereignisse, k }
+  }
+
+  it('schaltet um und rechnet die Steuersaetze neu', () => {
+    const { bon, ereignisse, k } = bonMitDreiZeilen()
+    expect(bon.zeilen[0]?.steuersatzPromille).toBe(STEUERSATZ.regel)
+
+    const wechsel = wechsleVerzehrart(bon, k, 'ausser-haus', regel)
+    const danach = bonAusEreignissen([...ereignisse, wechsel])
+
+    expect(danach.verzehrart).toBe('ausser-haus')
+    expect(danach.zeilen[0]?.steuersatzPromille).toBe(STEUERSATZ.ermaessigt)
+    expect(danach.zeilen[1]?.steuersatzPromille).toBe(STEUERSATZ.ermaessigt)
+  })
+
+  it('reisst Positionen mit eigener Verzehrart NICHT mit', () => {
+    const { bon, ereignisse, k } = bonMitDreiZeilen()
+    const wechsel = wechsleVerzehrart(bon, k, 'ausser-haus', regel)
+
+    expect(wechsel.unberuehrt).toEqual([bon.zeilen[2]?.lineId])
+    expect(wechsel.betroffen.map((b) => b.lineId)).toEqual([
+      bon.zeilen[0]?.lineId,
+      bon.zeilen[1]?.lineId,
+    ])
+
+    const danach = bonAusEreignissen([...ereignisse, wechsel])
+    expect(danach.zeilen[2]?.verzehrart).toBe('ausser-haus')
+    expect(danach.zeilen[2]?.verzehrartQuelle).toBe('position')
+  })
+
+  it('haelt fest, welcher Steuersatz vorher und nachher galt', () => {
+    // Bei einer Pruefung ist genau das die Frage: warum 7 %.
+    const { bon, k } = bonMitDreiZeilen()
+    const wechsel = wechsleVerzehrart(bon, k, 'ausser-haus', regel)
+
+    expect(wechsel.vorher).toBe('im-haus')
+    expect(wechsel.nachher).toBe('ausser-haus')
+    for (const b of wechsel.betroffen) {
+      expect(b.vorherSteuersatzPromille).toBe(STEUERSATZ.regel)
+      expect(b.nachherSteuersatzPromille).toBe(STEUERSATZ.ermaessigt)
+      expect(b.artikelId).toBeTruthy()
+    }
+  })
+
+  it('laesst sich mehrfach hin und her schalten', () => {
+    const { bon, ereignisse, k } = bonMitDreiZeilen()
+    const hin = wechsleVerzehrart(bon, k, 'ausser-haus', regel)
+    const zwischen = bonAusEreignissen([...ereignisse, hin])
+    const zurueck = wechsleVerzehrart(zwischen, k, 'im-haus', regel)
+    const danach = bonAusEreignissen([...ereignisse, hin, zurueck])
+
+    expect(danach.verzehrart).toBe('im-haus')
+    expect(danach.zeilen[0]?.steuersatzPromille).toBe(STEUERSATZ.regel)
+    // Die abweichende Zeile blieb beide Male unberuehrt.
+    expect(danach.zeilen[2]?.verzehrart).toBe('ausser-haus')
+  })
+
+  it('aendert den Gesamtbetrag nicht, nur die Steueraufteilung', () => {
+    const { bon, ereignisse, k } = bonMitDreiZeilen()
+    const vorher = gesamtbetrag(bon)
+    const danach = bonAusEreignissen([...ereignisse, wechsleVerzehrart(bon, k, 'ausser-haus', regel)])
+
+    expect(gesamtbetrag(danach)).toBe(vorher)
+    // Die Steuer sinkt, weil mehr auf den ermaessigten Satz faellt.
+    expect(steuersumme(bonSteuerausweis(danach))).toBeLessThan(steuersumme(bonSteuerausweis(bon)))
+  })
+
+  it('weist einen Wechsel auf dieselbe Verzehrart ab', () => {
+    const { bon, k } = bonMitDreiZeilen()
+    expect(() => wechsleVerzehrart(bon, k, 'im-haus', regel)).toThrow(/bereits/)
+  })
+
+  it('ist nach dem Abschluss nicht mehr moeglich', () => {
+    const k = kontext()
+    let ereignisse: SaleEventData[] = [starteBon(k, 'BON-1', 'KASSE-01', 'im-haus')]
+    let bon = bonAusEreignissen(ereignisse)
+    const e = fuegePositionHinzu(bon, k, KAESEKUCHEN, regel)
+    ereignisse = [...ereignisse, e, nimmZahlung(bonAusEreignissen([...ereignisse, e]), k, 'bar', cents(390))]
+    bon = bonAusEreignissen(ereignisse)
+    const ende = schliesseBonAb(bon, k)
+    const abgeschlossen = bonAusEreignissen([...ereignisse, ende])
+
+    expect(() => wechsleVerzehrart(abgeschlossen, k, 'ausser-haus', regel)).toThrow(/abgeschlossen/)
+  })
+
+  it('laesst stornierte Zeilen aus', () => {
+    const { bon, ereignisse, k } = bonMitDreiZeilen()
+    const storno = stornierePosition(bon, k, bon.zeilen[0]?.lineId ?? '', 'Irrtum')
+    const nachStorno = bonAusEreignissen([...ereignisse, storno])
+    const wechsel = wechsleVerzehrart(nachStorno, k, 'ausser-haus', regel)
+
+    expect(wechsel.betroffen.map((b) => b.lineId)).toEqual([bon.zeilen[1]?.lineId])
   })
 })

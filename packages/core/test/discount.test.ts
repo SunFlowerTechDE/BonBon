@@ -233,6 +233,32 @@ describe('verteileRabatt — Eigenschaften', () => {
     )
   })
 
+  it('zeigt den Fall, in dem ein Anteil um fast einen vollen Cent abweicht', () => {
+    // Der teuerste bekannte Fall, gefunden durch Absuchen aller Grundlagen bis
+    // 3,00 EUR und aller Prozentsaetze in Hundertstelschritten. Er ist kein
+    // Fehler, sondern der Preis der Teleskop-Konstruktion: die Gesamtsumme
+    // stimmt exakt, der einzelne Anteil weicht dafuer um bis zu (knapp) einen
+    // vollen Cent ab statt um einen halben.
+    // Abgearbeitet wird aufsteigend nach Steuersatz, also erst 7 %, dann 19 %.
+    // Die Abweichung trifft den zweiten Anteil.
+    const v = verteileRabatt(
+      [
+        { steuersatzPromille: STEUERSATZ.ermaessigt, brutto: cents(217) },
+        { steuersatzPromille: STEUERSATZ.regel, brutto: cents(283) },
+      ],
+      { art: 'prozent', hundertstelProzent: 9470 },
+    )
+
+    const zweiter = v.anteile.find((a) => a.steuersatzPromille === STEUERSATZ.regel)
+    const exakt = (283 * 9470) / VOLLER_RABATT // 268,001
+    expect(negateCents(zweiter?.betrag ?? cents(0))).toBe(269)
+    expect(Math.abs(269 - exakt)).toBeCloseTo(0.999, 3)
+
+    // Trotzdem: die Summe stimmt auf den Cent.
+    expect(rabattsumme(v)).toBe(v.gesamt)
+    expect(v.gesamt).toBe(-474) // 500 * 0,9470 = 473,5 -> 474 (halbe Einheit auf)
+  })
+
   it('weist einen Prozentsatz ueber 100 ab', () => {
     expect(() =>
       verteileRabatt([{ steuersatzPromille: 190, brutto: cents(100) }], {

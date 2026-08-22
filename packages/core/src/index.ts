@@ -91,6 +91,7 @@ export {
   type Bon,
   type Bonzeile,
   type Bonzustand,
+  type DiningModeChanged,
   type DiscountApplied,
   type Kontext,
   type LineAdded,
@@ -101,6 +102,7 @@ export {
   type SaleEventData,
   type SaleFinished,
   type SaleStarted,
+  type Steuersatzregel,
   type VerzehrartQuelle,
   aendereMenge,
   aktiveZeilen,
@@ -117,5 +119,6 @@ export {
   schliesseBonAb,
   starteBon,
   stornierePosition,
+  wechsleVerzehrart,
   zeilensumme as bonZeilensumme,
 } from './sale.js'

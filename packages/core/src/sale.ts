@@ -31,6 +31,20 @@ import type { IsoTimestamp } from './time.js'
  */
 export type VerzehrartQuelle = 'bon' | 'position'
 
+/**
+ * Der Steuersatz als **Funktion** aus (Produkt, Verzehrart, Datum) — nicht als
+ * Feld am Produkt (CLAUDE.md, Regel 4).
+ *
+ * Der Kern kennt die Regel nicht selbst; sie kommt von aussen, weil sie sich
+ * mit dem Datum aendert (die Gastronomie-Absenkung von 2020 ist das bekannte
+ * Beispiel) und aus den Stammdaten stammt.
+ */
+export type Steuersatzregel = (
+  artikelId: string,
+  verzehrart: Verzehrart,
+  zeitpunkt: IsoTimestamp,
+) => SteuersatzPromille
+
 export interface SaleStarted {
   readonly type: 'SaleStarted'
   readonly saleId: string
@@ -45,6 +59,8 @@ export interface LineAdded {
   readonly saleId: string
   readonly occurredAt: IsoTimestamp
   readonly lineId: string
+  /** Verweis auf den Artikel — noetig, um den Steuersatz neu zu bestimmen. */
+  readonly artikelId: string
   readonly bezeichnung: string
   /** Darf negativ sein — Warenrücknahme oder Positionsstorno (DSFinV-K 4.2.5). */
   readonly menge: number
@@ -79,6 +95,34 @@ export interface DiscountApplied {
   readonly verteilung: Rabattverteilung
 }
 
+/**
+ * Die Verzehrart des Bons wurde umgeschaltet.
+ *
+ * Regel 1 verbietet die **stille** Aenderung, nicht die Aenderung — ein
+ * eigenes Ereignis ist der vorgesehene Weg. Es haelt fest, welche Zeilen
+ * betroffen waren und welcher Steuersatz vorher und nachher galt. Bei einer
+ * Pruefung ist genau das die Frage: warum 7 %.
+ */
+export interface DiningModeChanged {
+  readonly type: 'DiningModeChanged'
+  readonly saleId: string
+  readonly occurredAt: IsoTimestamp
+  readonly vorher: Verzehrart
+  readonly nachher: Verzehrart
+  readonly betroffen: readonly {
+    readonly lineId: string
+    readonly artikelId: string
+    readonly vorherSteuersatzPromille: SteuersatzPromille
+    readonly nachherSteuersatzPromille: SteuersatzPromille
+  }[]
+  /**
+   * Zeilen, deren Verzehrart einzeln gesetzt wurde und die deshalb
+   * unveraendert bleiben. Auch das gehoert festgehalten — sonst sieht es bei
+   * einer Pruefung nach einem uebersehenen Fall aus.
+   */
+  readonly unberuehrt: readonly string[]
+}
+
 export interface PaymentTaken {
   readonly type: 'PaymentTaken'
   readonly saleId: string
@@ -107,6 +151,7 @@ export type SaleEventData =
   | SaleStarted
   | LineAdded
   | LineVoided
+  | DiningModeChanged
   | DiscountApplied
   | PaymentTaken
   | SaleFinished
@@ -116,6 +161,7 @@ export type SaleEventData =
 
 export interface Bonzeile {
   readonly lineId: string
+  readonly artikelId: string
   readonly bezeichnung: string
   readonly menge: number
   readonly einzelpreis: Cents
@@ -249,6 +295,7 @@ export function bonAusEreignissen(ereignisse: readonly SaleEventData[]): Bon {
         }
         const zeile: Bonzeile = {
           lineId: ereignis.lineId,
+          artikelId: ereignis.artikelId,
           bezeichnung: ereignis.bezeichnung,
           menge: ereignis.menge,
           einzelpreis: ereignis.einzelpreis,
@@ -277,6 +324,25 @@ export function bonAusEreignissen(ereignisse: readonly SaleEventData[]): Bon {
               ? { ...z, storniert: true, stornogrund: ereignis.grund }
               : z,
           ),
+        }
+        break
+      }
+
+      case 'DiningModeChanged': {
+        const betroffen = new Map(ereignis.betroffen.map((b) => [b.lineId, b]))
+        bon = {
+          ...bon,
+          verzehrart: ereignis.nachher,
+          zeilen: bon.zeilen.map((z) => {
+            const aenderung = betroffen.get(z.lineId)
+            return aenderung === undefined
+              ? z
+              : {
+                  ...z,
+                  verzehrart: ereignis.nachher,
+                  steuersatzPromille: aenderung.nachherSteuersatzPromille,
+                }
+          }),
         }
         break
       }
@@ -325,10 +391,10 @@ export function starteBon(
 }
 
 export interface PositionEingabe {
+  readonly artikelId: string
   readonly bezeichnung: string
   readonly menge: number
   readonly einzelpreis: Cents
-  readonly steuersatzPromille: SteuersatzPromille
   /** Nur setzen, wenn die Position von der Verzehrart des Bons abweicht. */
   readonly verzehrart?: Verzehrart
 }
@@ -337,23 +403,84 @@ export function fuegePositionHinzu(
   bon: Bon,
   kontext: Kontext,
   eingabe: PositionEingabe,
+  regel: Steuersatzregel,
 ): LineAdded {
   if (eingabe.menge === 0) throw new BonFehler('Eine Position mit Menge null ergibt keinen Sinn')
   if (!Number.isSafeInteger(eingabe.menge)) {
     throw new BonFehler('Menge muss eine Ganzzahl sein: ' + String(eingabe.menge))
   }
   const abweichend = eingabe.verzehrart !== undefined && eingabe.verzehrart !== bon.verzehrart
+  const verzehrart = eingabe.verzehrart ?? bon.verzehrart
   return {
     type: 'LineAdded',
     saleId: bon.saleId,
     occurredAt: kontext.occurredAt,
     lineId: kontext.naechsteId(),
+    artikelId: eingabe.artikelId,
     bezeichnung: eingabe.bezeichnung,
     menge: eingabe.menge,
     einzelpreis: eingabe.einzelpreis,
-    steuersatzPromille: eingabe.steuersatzPromille,
-    verzehrart: eingabe.verzehrart ?? bon.verzehrart,
+    // Der Steuersatz wird aus der Regel bestimmt, nicht uebergeben (Regel 4).
+    steuersatzPromille: regel(eingabe.artikelId, verzehrart, kontext.occurredAt),
+    verzehrart,
     verzehrartQuelle: abweichend ? 'position' : 'bon',
+  }
+}
+
+/**
+ * Schaltet die Verzehrart des ganzen Bons um.
+ *
+ * Drei Bedingungen:
+ *
+ * 1. Positionen mit eigener Verzehrart (Herkunft `'position'`) bleiben
+ *    **unberuehrt**. Wer eine Zeile ausdruecklich abweichend gesetzt hat, will
+ *    sie nicht vom Bon-Umschalter mitgerissen bekommen.
+ * 2. Das Ereignis haelt fest, welche Zeilen betroffen waren und welcher
+ *    Steuersatz vorher und nachher galt.
+ * 3. Nur vor `SaleFinished` zulaessig.
+ */
+export function wechsleVerzehrart(
+  bon: Bon,
+  kontext: Kontext,
+  nachher: Verzehrart,
+  regel: Steuersatzregel,
+): DiningModeChanged {
+  if (bon.zustand !== 'offen') {
+    throw new BonFehler(
+      'Die Verzehrart laesst sich nur an einem offenen Bon aendern, dieser ist ' +
+        bon.zustand +
+        '.',
+    )
+  }
+  if (nachher === bon.verzehrart) {
+    throw new BonFehler('Die Verzehrart ist bereits ' + nachher)
+  }
+
+  const betroffen: DiningModeChanged['betroffen'][number][] = []
+  const unberuehrt: string[] = []
+
+  for (const zeile of bon.zeilen) {
+    if (zeile.storniert) continue
+    if (zeile.verzehrartQuelle === 'position') {
+      unberuehrt.push(zeile.lineId)
+      continue
+    }
+    betroffen.push({
+      lineId: zeile.lineId,
+      artikelId: zeile.artikelId,
+      vorherSteuersatzPromille: zeile.steuersatzPromille,
+      nachherSteuersatzPromille: regel(zeile.artikelId, nachher, kontext.occurredAt),
+    })
+  }
+
+  return {
+    type: 'DiningModeChanged',
+    saleId: bon.saleId,
+    occurredAt: kontext.occurredAt,
+    vorher: bon.verzehrart,
+    nachher,
+    betroffen,
+    unberuehrt,
   }
 }
 
@@ -397,6 +524,7 @@ export function aendereMenge(
     saleId: bon.saleId,
     occurredAt: kontext.occurredAt,
     lineId: kontext.naechsteId(),
+    artikelId: zeile.artikelId,
     bezeichnung: zeile.bezeichnung,
     menge: neueMenge,
     einzelpreis: zeile.einzelpreis,

@@ -330,6 +330,18 @@ Das ist richtig: Der Rabatt bezieht sich auf das, was der Kunde tatsächlich zah
 
 **Ist die Bemessungsgrundlage null** — Verkauf und Retoure heben sich auf —, wird ein fester Rabattbetrag **abgelehnt**. Es gäbe keine nachvollziehbare Zuordnung zu den Steuersätzen; alles auf einen Satz zu legen wäre eine erfundene Steuerzuordnung. Ein Prozentrabatt ist in dem Fall zulässig, weil er null ergibt.
 
+### Die Verzehrart des Bons ist umschaltbar — über ein eigenes Ereignis
+
+Regel 1 verbietet die **stille** Änderung, nicht die Änderung. `DiningModeChanged` ist der vorgesehene Weg, und der Umschalter „Hier essen / Mitnehmen" ist laut Regel 4 die wichtigste Einzelinteraktion der ganzen App.
+
+Drei Bedingungen:
+
+1. **Positionen mit eigener Verzehrart bleiben unberührt.** Wer eine Zeile ausdrücklich abweichend gesetzt hat (Herkunft `'position'`), will sie nicht vom Bon-Umschalter mitgerissen bekommen. Das Ereignis führt diese Zeilen unter `unberuehrt` auf — sonst sähe es bei einer Prüfung nach einem übersehenen Fall aus.
+2. **Das Ereignis hält je betroffener Zeile fest, welcher Steuersatz vorher und nachher galt.** Bei einer Prüfung ist genau das die Frage: warum 7 %.
+3. **Nur vor `SaleFinished`.** Danach ist der Bon signiert und ausgegeben.
+
+Der Steuersatz wird dabei über die `Steuersatzregel` neu bestimmt — eine Funktion aus `(Produkt, Verzehrart, Datum)`, wie Regel 4 es verlangt. Sie ist kein Feld am Artikel und liegt nicht im Kern, weil sie sich mit dem Datum ändert.
+
 ### Der Bon ist die Faltung seiner Ereignisse
 
 Kein veränderbares Objekt. Ein Storno setzt ein Kennzeichen, die Zeile bleibt stehen (Regel 1). Es gibt bewusst **kein** Ereignis „Menge geändert": Eine Mengenänderung ist ein Storno plus eine neue Zeile, die über `ersetzt` auf die alte verweist. Bei einer Prüfung ist das der aussagekräftigere Verlauf.
