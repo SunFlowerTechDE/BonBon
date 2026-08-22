@@ -290,6 +290,51 @@ Gerechnet wird ausschließlich in Ganzzahlen: `rest * 2 >= nenner` statt einer D
 `netto = brutto − steuer`. Damit gilt ausnahmslos `netto + steuer === brutto`, auf jeder Zeile und in der Summe. Würde Netto eigen gerundet, ginge diese Gleichung gelegentlich um einen Cent daneben.
 
 **Geldbeträge sind nie negative Null.** `cents()` ebnet `-0` zu `0` ein. `-0 === 0` ist zwar wahr, `Object.is(-0, 0)` aber nicht — und in der Darstellung würde daraus „-0,00" auf dem Beleg.
+
+### 18. Ein Bonrabatt ist eine eigene Position, verteilt über die Steuersätze
+
+**Wie die DSFinV-K es darstellt** — nachgeschlagen, Kapitel 4.2.4 „Preisnachlässe, Rabatte, Entgeltminderungen":
+
+> „Einige Entgeltminderungen (z. B. Zwischensummenrabatte) beziehen sich nicht auf die einzelne Positionszeile, sondern auf den gesamten Bon (z. B. 3% Preisnachlass bei Kundenkarte) […]. **Diese Rabatte sind als gesonderte Positionszeile mit negativen Vorzeichen in der Datei Bonpos darzustellen. Die Aufteilung der Entgeltminderung erfolgt in der Datei Bonpos_USt.**"
+
+Und zur Frage, ob überhaupt aufgeteilt werden muss:
+
+> „Die erleichterte Trennung der Entgelte ist jedoch bei der Nutzung elektronischer Kassensysteme nicht möglich. Hier sind die Entgeltminderungen also **direkt zuzuordnen**."
+>
+> — DSFinV-K Version 2.4, Kapitel 4.2.4
+
+Daraus folgt das Datenmodell:
+
+- Ein Bonrabatt ist **eine eigene Position** mit negativem Betrag, keine Minderung der Positionspreise.
+- Diese Position trägt **je Steuersatz einen Anteil**.
+- `Bonpos_USt` führt fünf Dezimalstellen (Regel 17) — verteilt wird deshalb in höherer Genauigkeit, gerundet erst dort, wo auch die Steuer gerundet wird.
+
+### Verteilt wird über die laufende Summe — deshalb bleibt kein Restcent übrig
+
+Nicht durch eine Regel „wer den Rest bekommt", sondern durch die Bauweise. Für jeden Steuersatz wird die **kumulierte** Bemessungsgrundlage gerundet, und der Anteil ist die Differenz zweier gerundeter Kumulierter:
+
+```
+Anteil_k = runde(kumuliert_k) − runde(kumuliert_{k−1})
+Summe    = runde(kumuliert_n) − 0 = runde(gesamt)
+```
+
+Die Zwischenwerte heben sich weg. Die Summe der Anteile ist damit **immer** exakt der Gesamtrabatt — bei jeder Anzahl Steuersätze, bei jedem Verhältnis. Ein Rabatt von 100 % ergibt exakt null, weil die kumulierten Werte schon ganzzahlig sind und das Runden zur Identität wird.
+
+Verteilt wird proportional zur **Bemessungsgrundlage je Steuersatz**. Die Steuersätze werden aufsteigend abgearbeitet, damit das Ergebnis nicht von der Eingabereihenfolge abhängt.
+
+### Bon mit Retoure
+
+Enthält der Bon bereits eine Rücknahme als negative Position, wird **auf die vorzeichenbehaftete Grundlage** verteilt. Ein Satz mit negativer Grundlage bekommt einen positiven Anteil — seine Rücknahme fällt also kleiner aus.
+
+Das ist richtig: Der Rabatt bezieht sich auf das, was der Kunde tatsächlich zahlt, und der Retourenteil mindert die Zahlung bereits. Klammerte man ihn aus, wäre der Rabatt auf den Verkaufsteil höher als vereinbart.
+
+**Ist die Bemessungsgrundlage null** — Verkauf und Retoure heben sich auf —, wird ein fester Rabattbetrag **abgelehnt**. Es gäbe keine nachvollziehbare Zuordnung zu den Steuersätzen; alles auf einen Satz zu legen wäre eine erfundene Steuerzuordnung. Ein Prozentrabatt ist in dem Fall zulässig, weil er null ergibt.
+
+### Der Bon ist die Faltung seiner Ereignisse
+
+Kein veränderbares Objekt. Ein Storno setzt ein Kennzeichen, die Zeile bleibt stehen (Regel 1). Es gibt bewusst **kein** Ereignis „Menge geändert": Eine Mengenänderung ist ein Storno plus eine neue Zeile, die über `ersetzt` auf die alte verweist. Bei einer Prüfung ist das der aussagekräftigere Verlauf.
+
+Die Verzehrart wird je Position mit ihrer **Herkunft** festgehalten (`bon` oder `position`) — nicht nur das Ergebnis, sondern die Entscheidung (Regel 4).
 ---
 
 ## Struktur
