@@ -1,0 +1,28 @@
+{
+  "name": "@bonbon/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BonBon Kasse — Tauri v2, React im Webview.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "tauri": "tauri",
+    "start": "tauri dev"
+  },
+  "dependencies": {
+    "@bonbon/core": "workspace:*",
+    "@bonbon/ports": "workspace:*",
+    "@tauri-apps/api": "^2",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "vite": "^7"
+  }
+}

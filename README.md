@@ -32,6 +32,7 @@ cp .env.example .env    # Werte aus dem fiskaltrust Portal eintragen
 | `pnpm terminal` | ZVT-Mock-Terminal auf Port 20007 ([Anleitung](tools/mock-terminal/README.md)) |
 | `pnpm zahlung` | Kartenzahlung gegen das Mock-Terminal ([Anleitung](tools/zvt-spike/README.md)) |
 | `pnpm eventlog` | Event Log unter Last, Absturz- und Manipulationstest ([Anleitung](tools/eventlog-bench/README.md)) |
+| `pnpm --filter @bonbon/desktop dev` | die Kasse im Browser ([Anleitung](apps/desktop/README.md)) |
 
 ## Struktur
 
@@ -39,7 +40,7 @@ cp .env.example .env    # Werte aus dem fiskaltrust Portal eintragen
 packages/core/          @bonbon/core — reines TS, plattformfrei          [Geruest]
 packages/ports/         Geraete-Interfaces + Mocks                       [Platzhalter]
 packages/ui/            React-Komponenten                                [Platzhalter]
-apps/desktop/           Tauri-App                                        [Platzhalter, nicht initialisiert]
+apps/desktop/           Tauri-App — die Kasse (M2)                       [Verkauf laeuft]
 apps/backend/           Fastify + PostgreSQL                             [Platzhalter]
 tools/mock-terminal/    ZVT-Terminalsimulator, Port 20007                [fertig]
 tools/zvt-spike/        Kartenzahlung gegen das Mock-Terminal (M0)        [fertig]

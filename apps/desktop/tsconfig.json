@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Der Webview hat DOM, aber kein Node. Was Sockets oder Dateien braucht,
+    // laeuft im Rust-Teil und wird ueber invoke() aufgerufen.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "test", "vite.config.ts"]
+}

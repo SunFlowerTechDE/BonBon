@@ -114,3 +114,16 @@ export {
 } from './payment/zvt/protocol.js'
 
 export { ZvtPaymentTerminal, type ZvtPaymentOptions } from './payment/ZvtPaymentTerminal.js'
+
+// --- TSE -------------------------------------------------------------------
+
+export {
+  TseError,
+  type Signieranfrage,
+  type Signierergebnis,
+  type TsePort,
+  type TseStatus,
+  type TseZustand,
+} from './tse/TsePort.js'
+
+export { MockTse, type MockTseFehler, type MockTseOptions } from './tse/MockTse.js'

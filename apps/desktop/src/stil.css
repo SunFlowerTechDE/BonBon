@@ -1,0 +1,129 @@
+/*
+ * Schlicht und funktional, Standardformen.
+ * Die Farbwelt von BonBon kommt in einem eigenen Schritt.
+ */
+
+* { box-sizing: border-box; }
+
+:root {
+  --rahmen: #c9c9c9;
+  --flaeche: #ffffff;
+  --hintergrund: #f2f2f2;
+  --text: #1a1a1a;
+  --gedaempft: #666666;
+  --betont: #1a4f8a;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+}
+
+body { margin: 0; background: var(--hintergrund); color: var(--text); }
+
+.laden { padding: 2rem; font-size: 1.25rem; }
+
+.kasse { display: flex; flex-direction: column; height: 100vh; }
+
+/* --- Kopf --- */
+.kopf {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.5rem 1rem; background: var(--flaeche);
+  border-bottom: 1px solid var(--rahmen);
+}
+.kopf-links { display: flex; gap: 0.75rem; align-items: baseline; }
+.kasse-id { color: var(--gedaempft); font-size: 0.85rem; }
+
+.tse { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+.punkt { width: 0.9rem; height: 0.9rem; border-radius: 50%; display: inline-block; }
+.punkt.gruen { background: #2e7d32; }
+.punkt.gelb  { background: #f9a825; }
+.punkt.rot   { background: #c62828; }
+.punkt.grau  { background: #9e9e9e; }
+
+/* --- Verzehrart: gross und dauersichtbar --- */
+.verzehrart { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; background: var(--flaeche);
+  border-bottom: 1px solid var(--rahmen); }
+.verzehrart button {
+  flex: 1; padding: 1rem; font-size: 1.35rem; font-weight: 600;
+  border: 2px solid var(--rahmen); background: var(--hintergrund);
+  color: var(--text); border-radius: 6px; cursor: pointer;
+}
+.verzehrart button.gewaehlt { background: var(--betont); color: #fff; border-color: var(--betont); }
+.verzehrart button:disabled { opacity: 0.5; cursor: default; }
+
+/* --- Hauptbereich --- */
+.hauptbereich { display: flex; flex: 1; min-height: 0; }
+
+.raster { flex: 1; display: flex; flex-direction: column; padding: 1rem; min-width: 0; }
+.gruppen { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.gruppe {
+  padding: 0.5rem 1rem; border: 1px solid var(--rahmen); background: var(--flaeche);
+  border-radius: 4px; cursor: pointer; font-size: 1rem;
+}
+.gruppe.aktiv { background: var(--betont); color: #fff; border-color: var(--betont); }
+
+.artikel { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.75rem; overflow-y: auto; align-content: start; }
+.artikel-kachel {
+  display: flex; flex-direction: column; justify-content: space-between;
+  min-height: 5.5rem; padding: 0.75rem; border: 1px solid var(--rahmen);
+  background: var(--flaeche); border-radius: 6px; cursor: pointer; text-align: left;
+}
+.artikel-kachel:active { background: #e8eef5; }
+.artikel-name { font-size: 1.05rem; }
+.artikel-preis { font-size: 1.2rem; font-weight: 600; }
+
+/* --- Bon --- */
+.bon { width: 24rem; display: flex; flex-direction: column; padding: 1rem;
+  background: var(--flaeche); border-left: 1px solid var(--rahmen); }
+.bon h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.leer { color: var(--gedaempft); }
+
+.bonzeilen { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
+.bonzeilen li { display: grid; grid-template-columns: 2.5rem 1fr 1.2rem 4.5rem 1.5rem;
+  gap: 0.25rem; align-items: baseline; padding: 0.3rem 0; border-bottom: 1px solid #eee; }
+.menge { color: var(--gedaempft); }
+.kennz { color: var(--gedaempft); font-size: 0.85rem; }
+.betrag { text-align: right; font-variant-numeric: tabular-nums; }
+.weg { border: none; background: none; color: #c62828; cursor: pointer; font-size: 1.1rem; }
+
+.steuern { width: 100%; margin: 0.5rem 0; font-size: 0.8rem; color: var(--gedaempft);
+  border-collapse: collapse; }
+.steuern td { padding: 0.1rem 0; font-variant-numeric: tabular-nums; }
+.steuern td:last-child { text-align: right; }
+
+.summe { display: flex; justify-content: space-between; align-items: baseline;
+  padding: 0.75rem 0; border-top: 2px solid var(--text); font-size: 1.5rem; }
+
+.zahlen { padding: 1rem; font-size: 1.35rem; font-weight: 600; cursor: pointer;
+  background: var(--betont); color: #fff; border: none; border-radius: 6px; }
+.zahlen:disabled { background: #b9c6d4; cursor: default; }
+
+/* --- Zahlung --- */
+.dialog-hintergrund { position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; }
+.dialog { background: var(--flaeche); padding: 1.5rem; border-radius: 8px;
+  min-width: 26rem; }
+.dialog h2 { margin: 0 0 1rem; font-size: 1.5rem; }
+
+.schnellbetraege { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+.schnellbetraege button { padding: 1rem; font-size: 1.2rem; cursor: pointer;
+  border: 1px solid var(--rahmen); background: var(--hintergrund); border-radius: 6px; }
+.schnellbetraege button.passend { font-weight: 700; border-color: var(--betont); }
+
+.rueckgeld { display: flex; justify-content: space-between; align-items: baseline;
+  margin: 1rem 0; padding: 1rem; background: #1a1a1a; color: #fff; border-radius: 6px; }
+.rueckgeld strong { font-size: 2.5rem; font-variant-numeric: tabular-nums; }
+
+.dialog-knoepfe { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.dialog-knoepfe button { flex: 1; padding: 0.9rem; font-size: 1.1rem; cursor: pointer;
+  border-radius: 6px; border: 1px solid var(--rahmen); background: var(--hintergrund); }
+.dialog-knoepfe .bar { background: var(--betont); color: #fff; border-color: var(--betont); }
+.dialog-knoepfe .bar:disabled { background: #b9c6d4; border-color: #b9c6d4; cursor: default; }
+
+/* --- Fuss --- */
+.fehler { padding: 0.75rem 1rem; background: #ffebee; color: #b71c1c;
+  border-top: 1px solid #ef9a9a; }
+.fuss { padding: 0.5rem 1rem; background: var(--flaeche); border-top: 1px solid var(--rahmen);
+  font-size: 0.85rem; }
+.abschluss { margin-bottom: 0.25rem; }
+.fuss pre, .bonvorschau { font-size: 0.75rem; max-height: 20rem; overflow: auto;
+  background: #fafafa; padding: 0.5rem; }

@@ -1,0 +1,6 @@
+{
+  "kasse": { "deviceId": "KASSE-01", "seriennummer": "BONBON-DEV-001" },
+  "tse": { "art": "mock" },
+  "drucker": { "art": "vorschau", "zeichenProZeile": 48, "kassenlade": true },
+  "eventLog": { "art": "speicher" }
+}
