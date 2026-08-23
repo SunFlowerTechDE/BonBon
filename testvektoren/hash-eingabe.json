@@ -1,0 +1,84 @@
+{
+  "zweck": "Gemeinsame Testvektoren fuer die Hash-Eingabe der Event-Log-Kette. TypeScript (@bonbon/core, eventHashInput) und Rust (apps/desktop/src-tauri, hash_eingabe) lesen dieselbe Datei und pruefen dagegen. Ein neues Feld am Ereignis laesst beide Seiten fehlschlagen, statt sie still auseinanderlaufen zu lassen.",
+  "erzeugtVon": "werkzeuge/testvektoren-erzeugen.mjs",
+  "vektoren": [
+    {
+      "name": "einfach",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ereignis": {
+        "id": "EVT-0001",
+        "deviceId": "KASSE-01",
+        "seq": 1,
+        "occurredAt": "2026-08-21T10:00:00+02:00",
+        "type": "PositionHinzugefuegt",
+        "payload": "{}"
+      },
+      "eingabe": "64:0000000000000000000000000000000000000000000000000000000000000000|8:EVT-0001|8:KASSE-01|1:1|25:2026-08-21T10:00:00+02:00|20:PositionHinzugefuegt|2:{}"
+    },
+    {
+      "name": "mit Nutzdaten",
+      "prevHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ereignis": {
+        "id": "01J00000000000000000000042",
+        "deviceId": "KASSE-01",
+        "seq": 4711,
+        "occurredAt": "2026-12-31T23:59:60Z",
+        "type": "SaleFinished",
+        "payload": "{\"artikel\":\"Cappuccino\",\"betragCent\":380}"
+      },
+      "eingabe": "64:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|26:01J00000000000000000000042|8:KASSE-01|4:4711|20:2026-12-31T23:59:60Z|12:SaleFinished|41:{\"artikel\":\"Cappuccino\",\"betragCent\":380}"
+    },
+    {
+      "name": "Umlaute und Trennzeichen",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ereignis": {
+        "id": "EVT|0002",
+        "deviceId": "KASSE:01",
+        "seq": 2,
+        "occurredAt": "2026-08-21T10:00:00+02:00",
+        "type": "Kaesekuchen-Aenderung",
+        "payload": "{\"text\":\"Bäckerstraße 12\"}"
+      },
+      "eingabe": "64:0000000000000000000000000000000000000000000000000000000000000000|8:EVT|0002|8:KASSE:01|1:2|25:2026-08-21T10:00:00+02:00|21:Kaesekuchen-Aenderung|26:{\"text\":\"Bäckerstraße 12\"}"
+    },
+    {
+      "name": "leere Felder",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ereignis": {
+        "id": "",
+        "deviceId": "",
+        "seq": 0,
+        "occurredAt": "",
+        "type": "",
+        "payload": ""
+      },
+      "eingabe": "64:0000000000000000000000000000000000000000000000000000000000000000|0:|0:|1:0|0:|0:|0:"
+    },
+    {
+      "name": "Verschiebefalle a",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ereignis": {
+        "id": "X",
+        "deviceId": "Y",
+        "seq": 1,
+        "occurredAt": "Z",
+        "type": "a",
+        "payload": "bc"
+      },
+      "eingabe": "64:0000000000000000000000000000000000000000000000000000000000000000|1:X|1:Y|1:1|1:Z|1:a|2:bc"
+    },
+    {
+      "name": "Verschiebefalle b",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ereignis": {
+        "id": "X",
+        "deviceId": "Y",
+        "seq": 1,
+        "occurredAt": "Z",
+        "type": "ab",
+        "payload": "c"
+      },
+      "eingabe": "64:0000000000000000000000000000000000000000000000000000000000000000|1:X|1:Y|1:1|1:Z|2:ab|1:c"
+    }
+  ]
+}

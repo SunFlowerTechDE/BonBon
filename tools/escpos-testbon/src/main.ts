@@ -18,11 +18,11 @@ import {
   MockPrinter,
   PrinterError,
   type PrinterPort,
-  TcpPrinter,
   cashDrawerPulse,
   hexdump,
   previewBox,
 } from '@bonbon/ports'
+import { TcpPrinter } from '@bonbon/ports/node'
 import { cents } from '@bonbon/core'
 
 import {

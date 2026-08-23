@@ -31,8 +31,7 @@ bindet er auf `::1`; `127.0.0.1` schlägt fehl, `localhost` funktioniert.
 ## Was noch nicht dran ist
 
 Kein Rabatt in der Oberfläche, kein Bon parken, keine Bedienerverwaltung, kein
-Tagesabschluss, keine Artikelverwaltung. Und die Farbwelt fehlt — das Aussehen
-ist bewusst schlicht.
+Tagesabschluss, keine Artikelverwaltung.
 
 ---
 
@@ -42,18 +41,8 @@ Welche TSE, welcher Drucker, welcher Event Log steht in
 [`public/bonbon.config.json`](public/bonbon.config.json) und wird zur Laufzeit
 gelesen (CLAUDE.md, Ports und Adapter).
 
-Die Vorgaben sind so gewählt, dass die App **ohne Launcher und ohne Drucker
-startet**:
-
-```json
-{
-  "tse":      { "art": "mock" },
-  "drucker":  { "art": "vorschau", "zeichenProZeile": 48, "kassenlade": true },
-  "eventLog": { "art": "speicher" }
-}
-```
-
-Gegen escpresso und mit SQLite:
+Die mitgelieferte Datei steht auf dem **echten Weg** — escpresso auf Port 9100
+und SQLite:
 
 ```json
 {
@@ -61,6 +50,21 @@ Gegen escpresso und mit SQLite:
   "eventLog": { "art": "sqlite", "pfad": "bonbon-eventlog.db" }
 }
 ```
+
+Fehlt die Datei oder ist sie unlesbar, gilt die Vorgabe aus
+[`src/konfiguration.ts`](src/konfiguration.ts) — Mock-TSE, Vorschaudrucker,
+Event Log im Speicher. Die App startet damit **ohne jede Peripherie**, und sie
+sagt im Protokoll, dass die Vorgabe greift.
+
+Ist `tcp` eingestellt und escpresso läuft nicht, wird der Verkauf trotzdem
+abgeschlossen und signiert; der Bon gilt als **nicht gedruckt** und der Grund
+steht in der Abschlussmeldung. Ein fehlender Drucker darf einen Umsatz nicht
+verhindern.
+
+> **Offener Punkt.** Die Datei liegt in `public/` und wird beim Bau in das
+> Anwendungsbündel gepackt. Sie lässt sich also derzeit **nicht ändern, ohne
+> neu zu bauen** — für eine Kasse im Laden zu wenig. Die Konfiguration gehört
+> neben die Anwendung, gelesen über den Rust-Teil. Steht für M3 an.
 
 `tcp` und `sqlite` brauchen den Rust-Teil. Im Browser fällt die App auf
 Vorschau und Speicher zurück **und sagt es im Protokoll** — statt es zu
@@ -91,12 +95,38 @@ Implementierung — genau der Fehler, den Tauri hier vermeiden soll.
 
 Eine Ausnahme gibt es: die **Hash-Eingabe** der Kette muss auf beiden Seiten
 Byte für Byte gleich gebildet werden, sonst bricht die Kette beim Wechsel des
-Schreibwegs. Ein Rust-Test hält den erwarteten Wert fest, und er wurde gegen
-`eventHashInput` aus `@bonbon/core` geprüft:
+Schreibwegs. Beide Seiten prüfen deshalb gegen **dieselbe Datei**,
+[`testvektoren/hash-eingabe.json`](../../testvektoren/hash-eingabe.json):
 
 ```
 64:0000…0000|8:EVT-0001|8:KASSE-01|1:1|25:2026-08-21T10:00:00+02:00|20:PositionHinzugefuegt|2:{}
 ```
+
+Ein festgeschriebener Wert im Rust-Test hätte heute gehalten und wäre
+stillschweigend gedriftet, sobald jemand dem Ereignis ein Feld hinzufügt: der
+Test bliebe grün, während die Ketten auseinanderlaufen. Mit der gemeinsamen
+Datei schlagen beide Seiten fehl. Das ist gewollt.
+
+---
+
+## Nachweis, dass der Rust-Weg wirklich läuft
+
+```
+cd apps/desktop/src-tauri && cargo test --lib
+cd apps/desktop/src-tauri && cargo test --lib -- --ignored   # braucht escpresso
+node werkzeuge/verkauf-im-fenster.mjs                        # braucht den Release-Bau
+```
+
+[`src/pfadtests.rs`](src-tauri/src/pfadtests.rs) ruft die Befehle **nicht** als
+gewöhnliche Rust-Funktionen auf, sondern über `tauri::test::get_ipc_response` —
+also über dieselbe IPC-Brücke, die auch der Webview benutzt, mit denselben
+JSON-Argumenten. Ein direkter Funktionsaufruf würde die Serialisierung
+überspringen, und genau dort könnte ein `Vec<u8>` unbemerkt verbogen werden.
+
+[`werkzeuge/verkauf-im-fenster.mjs`](../../werkzeuge/verkauf-im-fenster.mjs)
+schließt die letzte Lücke: es startet die **gebaute Exe** mit
+`--remote-debugging-port` und klickt die Knöpfe im laufenden Fenster. Damit ist
+auch das echte WebView2 im Weg, nicht nur die Mock-Runtime.
 
 ## Windows
 

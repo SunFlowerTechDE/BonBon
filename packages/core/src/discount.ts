@@ -56,14 +56,28 @@
  *
  *     Anteil_k − exakt_k = (runde(C_k) − C_k) − (runde(C_{k−1}) − C_{k−1})
  *
- * Der Rundungsfehler eines einzelnen Werts liegt in (−½, +½]. Die Differenz
- * zweier solcher Fehler liegt damit in (−1, +1) — **offen**, der volle Cent
- * wird also nicht erreicht, aber beliebig genau angenähert. Nachgerechnet über
- * alle Grundlagen bis 3,00 € und alle Prozentsätze in Hundertstelschritten
- * beträgt die größte Abweichung **0,999 Cent**:
+ * Die Schranke ist **geschlossen**: [−1, +1]. Der volle Cent wird erreicht.
  *
- *     Grundlage 2,17 € (Satz A) und 2,83 € (Satz B), Rabatt 94,70 %
- *     Anteil B: 2,69 €   exakt wären 2,680010 €
+ * Der Grund liegt in der Rundung vom Nullpunkt weg (siehe
+ * `rundeKaufmaennisch`). Für x ≥ 0 liegt der Rundungsfehler in (−½, +½], für
+ * x < 0 in [−½, +½) — ein negativer halber Cent wird abwärts gerundet, ein
+ * positiver aufwärts. Solange die kumulierte Summe **nicht negativ** wird,
+ * bleibt die Differenz zweier Fehler damit im offenen Intervall (−1, +1). Der
+ * größte Wert, der dort auftritt, ist 0,999 Cent:
+ *
+ *     Grundlage 2,17 € (7 %) und 2,83 € (19 %), Rabatt 94,70 %
+ *     Anteil 19 %: 2,69 €   exakt wären 2,680010 €
+ *
+ * **Steht eine Retoure im Bon, kreuzt die kumulierte Summe die Null** — dann
+ * liegt ein Zwischenwert auf einem negativen, der nächste auf einem positiven
+ * halben Cent, und die Differenz ist exakt 1:
+ *
+ *     Basen −1, +2, +1 Cent, Rabatt 1 Cent (Gesamtbasis 2)
+ *     Anteil 2: +2 Cent   exakt wären +1,00   Abweichung genau 1,00
+ *     Summe der Anteile: 1 Cent — exakt der Gesamtrabatt
+ *
+ * Praktisch kaum erreichbar, aber die Schranke gehört geschlossen formuliert.
+ * Ein Test auf `< 1` würde bei einem Retourenbon irgendwann fehlschlagen.
  *
  * Wichtig ist der Vergleich: bei einer **Einzelrundung** je Satz wäre die
  * Abweichung auf ±½ Cent begrenzt — dafür summierten sich die Anteile dann
@@ -75,8 +89,9 @@
  * einen Cent statt um einen halben von der reinen Verhältnisrechnung abweicht,
  * ist es sehr wohl — die Summe stimmt, und die Zuordnung ist nachvollziehbar.
  *
- * Ein Beispiel, an dem der volle Cent auftritt, steht im Test
- * „zeigt den Fall, in dem ein Anteil um einen vollen Cent abweicht".
+ * Beide Fälle stehen als Tests: „zeigt den Fall, in dem ein Anteil um fast
+ * einen vollen Cent abweicht" und „erreicht den vollen Cent, wenn die
+ * kumulierte Summe die Null kreuzt".
  */
 
 import { type Cents, addCents, cents, negateCents } from './money.js'

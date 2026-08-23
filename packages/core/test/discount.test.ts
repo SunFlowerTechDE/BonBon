@@ -259,6 +259,58 @@ describe('verteileRabatt — Eigenschaften', () => {
     expect(v.gesamt).toBe(-474) // 500 * 0,9470 = 473,5 -> 474 (halbe Einheit auf)
   })
 
+  it('erreicht den vollen Cent, wenn die kumulierte Summe die Null kreuzt', () => {
+    // Die Schranke ist GESCHLOSSEN, nicht offen. Bei rein positiven Basen
+    // bleibt die Abweichung unter einem Cent; sobald eine Retoure im Bon
+    // steht, kreuzt die kumulierte Summe die Null — dann liegt ein
+    // Zwischenwert auf einem negativen, der naechste auf einem positiven
+    // halben Cent, und die Differenz ist exakt 1.
+    //
+    // Ein Test auf `< 1` wuerde hier fehlschlagen.
+    const basis: RabattBasis[] = [
+      { steuersatzPromille: 0, brutto: cents(-1) },
+      { steuersatzPromille: 70, brutto: cents(2) },
+      { steuersatzPromille: 190, brutto: cents(1) },
+    ]
+    const v = verteileRabatt(basis, { art: 'betrag', betrag: cents(1) })
+
+    expect(v.anteile).toEqual([
+      { steuersatzPromille: 0, betrag: 1 },
+      { steuersatzPromille: 70, betrag: -2 },
+      { steuersatzPromille: 190, betrag: 0 },
+    ])
+
+    // Der mittlere Anteil weicht um genau einen Cent ab.
+    const exaktMitte = (1 * 2) / 2 // 1,00
+    expect(negateCents(v.anteile[1]?.betrag ?? cents(0)) - exaktMitte).toBe(1)
+
+    // Trotzdem: die Summe stimmt auf den Cent.
+    expect(rabattsumme(v)).toBe(v.gesamt)
+    expect(v.gesamt).toBe(-1)
+  })
+
+  it('haelt die Schranke von einem Cent auch bei gemischten Vorzeichen', () => {
+    const gemischt = fc.array(fc.record({ brutto: betrag, steuersatzPromille: satz }), {
+      minLength: 1,
+      maxLength: 8,
+    })
+    fc.assert(
+      fc.property(gemischt, prozent, (basis, bp) => {
+        const v = verteileRabatt(basis, { art: 'prozent', hundertstelProzent: bp })
+        const jeSatz = new Map<number, number>()
+        for (const e of basis) {
+          jeSatz.set(e.steuersatzPromille, (jeSatz.get(e.steuersatzPromille) ?? 0) + e.brutto)
+        }
+        for (const anteil of v.anteile) {
+          const exakt = ((jeSatz.get(anteil.steuersatzPromille) ?? 0) * bp) / VOLLER_RABATT
+          // Kleiner ODER GLEICH eins — die Schranke ist geschlossen.
+          expect(Math.abs(negateCents(anteil.betrag) - exakt)).toBeLessThanOrEqual(1)
+        }
+      }),
+      { numRuns: 500 },
+    )
+  })
+
   it('weist einen Prozentsatz ueber 100 ab', () => {
     expect(() =>
       verteileRabatt([{ steuersatzPromille: 190, brutto: cents(100) }], {

@@ -18,9 +18,9 @@ import {
   type PaymentOutcome,
   type PaymentPort,
   UnresolvedPaymentError,
-  ZvtPaymentTerminal,
   assertSettled,
 } from '@bonbon/ports'
+import { ZvtPaymentTerminal } from '@bonbon/ports/node'
 
 function argWert(argv: readonly string[], name: string, vorgabe: string): string {
   const i = argv.indexOf(name)

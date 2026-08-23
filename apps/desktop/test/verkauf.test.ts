@@ -160,7 +160,7 @@ describe('TSE-Ausfall — Regel 8', () => {
 
 describe('Druckerausfall', () => {
   it('verweigert den Verkauf nicht', async () => {
-    const { kasse, drucker } = baueKasse()
+    const { drucker } = baueKasse()
     // Der Vorschaudrucker kann nicht scheitern — deshalb hier einer, der es tut.
     const kaputt = Object.assign(Object.create(Object.getPrototypeOf(drucker) as object), drucker, {
       print: () => Promise.reject(new Error('Kein Papier')),

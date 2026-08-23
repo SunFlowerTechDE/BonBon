@@ -89,6 +89,49 @@ export class Kasse {
     return this.bon?.zustand === 'offen'
   }
 
+  /**
+   * Knuepft an die schon geschriebenen Bons an.
+   *
+   * Ohne diesen Schritt beginnt die Kasse nach jedem Neustart wieder bei
+   * Belegnummer 00001 — und weil die Ereignis-Id aus der Belegnummer gebildet
+   * wird, kollidiert der erste Verkauf nach dem Neustart mit dem ersten
+   * Verkauf davor. Das Event Log weist ihn ab (die Id ist Primaerschluessel),
+   * und der Verkauf bricht ab, **nachdem** die TSE bereits signiert hat.
+   *
+   * Aufgefallen ist das erst beim zweiten Verkauf durch die gebaute
+   * Anwendung. Im kopflosen Test konnte es nicht auffallen: dort lebt die
+   * Kasse nur fuer die Dauer eines Tests, ein Neustart kommt darin nicht vor.
+   *
+   * Die Zahl kommt aus dem Log, nicht aus einer eigenen Zaehlerdatei: der Log
+   * ist die Aufzeichnung, und eine zweite Quelle koennte von ihm abweichen.
+   * Ein Bon beginnt mit genau einem `SaleStarted` — die Anzahl dieser
+   * Ereignisse ist damit die Anzahl der geschriebenen Bons.
+   *
+   * Muss vor dem ersten `beginneBon()` aufgerufen werden.
+   *
+   * **Woran das haengt.** Die Anzahl stimmt nur, solange jeder begonnene Bon
+   * auch abgeschlossen wird — bis auf den letzten, der beim Beenden noch offen
+   * sein kann. Das ist derzeit gegeben: `beginneBon()` wird nur gerufen, wenn
+   * kein offener Bon existiert, ein offener Bon laesst sich also nicht
+   * zugunsten eines neuen liegenlassen. Seine Nummer wird nie geschrieben und
+   * darf danach neu vergeben werden.
+   *
+   * Wer **Bon parken** oder **Bon verwerfen** einbaut, bricht das: dann
+   * verbraucht ein Bon eine Nummer, ohne sie zu hinterlassen, und die naechste
+   * Kasse vergibt sie ein zweites Mal. Ab da muss die Nummer aus dem Log
+   * selbst kommen (etwa als eigene Spalte), nicht aus einer Zaehlung.
+   */
+  async knuepfeAnVorgeschichteAn(): Promise<void> {
+    const bisher = await this.eventLog.anzahlTyp(this.konfiguration.kasse.deviceId, 'SaleStarted')
+    if (bisher > 0) {
+      this.onLog(
+        'Es liegen bereits ' + String(bisher) + ' Bons vor — die naechste Belegnummer ist ' +
+          String(bisher + 1) + '.',
+      )
+    }
+    this.bonNummer = bisher
+  }
+
   beginneBon(verzehrart: Verzehrart): Bon {
     this.bonNummer += 1
     this.idZaehler = 0

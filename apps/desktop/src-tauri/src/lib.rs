@@ -110,8 +110,9 @@ fn oeffne(pfad: &str) -> Result<Connection, String> {
 /// `@bonbon/core` (`eventHashInput`).
 ///
 /// Diese Funktion **muss** mit der TypeScript-Fassung übereinstimmen, sonst
-/// bricht die Kette beim Wechsel des Schreibwegs. Ein Test in
-/// `tests/hashkette.rs` vergleicht gegen einen dort festgehaltenen Wert.
+/// bricht die Kette beim Wechsel des Schreibwegs. Der Test unten prüft gegen
+/// `testvektoren/hash-eingabe.json` — dieselbe Datei, gegen die auch
+/// `@bonbon/core` prüft.
 fn hash_eingabe(prev_hash: &str, e: &VerkettetesEreignis) -> String {
     let felder = [
         prev_hash,
@@ -185,6 +186,25 @@ fn eventlog_anhaengen(
     Ok(ereignis)
 }
 
+/// Zaehlt die Ereignisse eines Geraets mit einem bestimmten Typ.
+///
+/// Bewusst nur eine Zaehlung, keine Auswertung: **was** die Zahl bedeutet,
+/// entscheidet die TypeScript-Seite. Sie liest daraus, wie viele Bons dieses
+/// Geraet schon geschrieben hat, und fuehrt die Belegnummer dort fort. Wuerde
+/// Rust das selbst herleiten, laege ein Stueck Fachlogik ein zweites Mal vor
+/// (CLAUDE.md, Stack).
+#[tauri::command]
+fn eventlog_anzahl_typ(pfad: String, device_id: String, r#type: String) -> Result<i64, String> {
+    let verbindung = oeffne(&pfad)?;
+    verbindung
+        .query_row(
+            "SELECT COUNT(*) FROM sale_events WHERE device_id = ?1 AND type = ?2",
+            rusqlite::params![device_id, r#type],
+            |z| z.get(0),
+        )
+        .map_err(|e| format!("Zaehlen nach Typ fehlgeschlagen: {e}"))
+}
+
 #[tauri::command]
 fn eventlog_anzahl(pfad: String) -> Result<i64, String> {
     let verbindung = oeffne(&pfad)?;
@@ -195,45 +215,103 @@ fn eventlog_anzahl(pfad: String) -> Result<i64, String> {
 
 // --- Start -----------------------------------------------------------------
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
+/// Der Befehlssatz — an einer Stelle, damit Betrieb und Test nicht auseinanderlaufen.
+///
+/// Der Beweislauf in `pfadtests` baut die App mit **demselben** Makro. Ein
+/// Befehl, der hier steht, ist damit auch im Test erreichbar; einer, der hier
+/// fehlt, fehlt in beiden. Zwei getrennte Listen wuerden still driften: der
+/// Test bliebe gruen, waehrend im Betrieb ein Befehl unbekannt ist.
+macro_rules! befehle {
+    () => {
+        tauri::generate_handler![
             tcp_senden,
             tcp_erreichbar,
             eventlog_anhaengen,
-            eventlog_anzahl
-        ])
+            eventlog_anzahl,
+            eventlog_anzahl_typ
+        ]
+    };
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .invoke_handler(befehle!())
         .run(tauri::generate_context!())
         .expect("Die Kasse konnte nicht gestartet werden");
 }
 
 #[cfg(test)]
+mod pfadtests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+
+    /// Ein Fall aus `testvektoren/hash-eingabe.json`.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vektor {
+        name: String,
+        prev_hash: String,
+        ereignis: VektorEreignis,
+        eingabe: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct VektorEreignis {
+        id: String,
+        device_id: String,
+        seq: i64,
+        occurred_at: String,
+        #[serde(rename = "type")]
+        typ: String,
+        payload: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Vektordatei {
+        vektoren: Vec<Vektor>,
+    }
 
     /// Die Hash-Eingabe muss Byte für Byte der TypeScript-Fassung entsprechen.
     ///
-    /// Der erwartete Wert stammt aus `eventHashInput` in `@bonbon/core`. Weicht
-    /// er ab, bricht die Kette, sobald jemand zwischen den Schreibwegen
-    /// wechselt — und das fiele erst bei der Prüfung auf.
+    /// Geprüft wird gegen `testvektoren/hash-eingabe.json` — dieselbe Datei,
+    /// gegen die auch `@bonbon/core` prüft. Ein festgeschriebener Wert hier
+    /// hätte heute gehalten, wäre aber stillschweigend gedriftet, sobald jemand
+    /// dem Ereignis ein Feld hinzufügt: dieser Test bliebe grün, während die
+    /// Ketten auseinanderlaufen.
+    ///
+    /// Mit der gemeinsamen Datei schlagen beide Seiten fehl. Das ist gewollt.
     #[test]
-    fn hash_eingabe_stimmt_mit_typescript_ueberein() {
-        let e = VerkettetesEreignis {
-            id: "EVT-0001".to_string(),
-            device_id: "KASSE-01".to_string(),
-            seq: 1,
-            occurred_at: "2026-08-21T10:00:00+02:00".to_string(),
-            typ: "PositionHinzugefuegt".to_string(),
-            payload: "{}".to_string(),
-            prev_hash: GENESIS_HASH.to_string(),
-            hash: String::new(),
-        };
-        let eingabe = hash_eingabe(GENESIS_HASH, &e);
-        assert_eq!(
-            eingabe,
-            "64:0000000000000000000000000000000000000000000000000000000000000000\
-|8:EVT-0001|8:KASSE-01|1:1|25:2026-08-21T10:00:00+02:00|20:PositionHinzugefuegt|2:{}"
-        );
+    fn hash_eingabe_stimmt_mit_den_testvektoren_ueberein() {
+        let pfad = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../testvektoren/hash-eingabe.json");
+        let inhalt = std::fs::read_to_string(pfad)
+            .unwrap_or_else(|e| panic!("Testvektoren nicht lesbar ({pfad}): {e}"));
+        let datei: Vektordatei =
+            serde_json::from_str(&inhalt).expect("Testvektoren nicht lesbar (JSON)");
+
+        assert!(!datei.vektoren.is_empty(), "Keine Testvektoren vorhanden");
+
+        for vektor in &datei.vektoren {
+            let e = VerkettetesEreignis {
+                id: vektor.ereignis.id.clone(),
+                device_id: vektor.ereignis.device_id.clone(),
+                seq: vektor.ereignis.seq,
+                occurred_at: vektor.ereignis.occurred_at.clone(),
+                typ: vektor.ereignis.typ.clone(),
+                payload: vektor.ereignis.payload.clone(),
+                prev_hash: vektor.prev_hash.clone(),
+                hash: String::new(),
+            };
+            assert_eq!(
+                hash_eingabe(&vektor.prev_hash, &e),
+                vektor.eingabe,
+                "Testvektor \"{}\" weicht ab — Rust und TypeScript bilden die                  Hash-Eingabe unterschiedlich. Die Kette braeche beim Wechsel                  des Schreibwegs.",
+                vektor.name
+            );
+        }
     }
 }

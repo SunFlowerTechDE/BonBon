@@ -5,9 +5,12 @@
  * Interface mit je einer Mock- und einer Echt-Implementierung. Umgeschaltet
  * wird ueber Konfiguration, nie ueber Code (CLAUDE.md, Ports und Adapter).
  *
- * Hinweis zur Plattform: `TcpPrinter` braucht `node:net` und laeuft daher im
- * Backend, in Werkzeugen und im Rust-Teil — nicht im Webview. Interface,
- * ESC/POS-Erzeugung und Mock sind frei von Laufzeitabhaengigkeiten.
+ * Hinweis zur Plattform: Dieser Einstiegspunkt ist **frei von
+ * Laufzeitabhaengigkeiten** und laeuft im Webview genauso wie in Node.
+ * Adapter, die `node:net` brauchen, liegen bewusst hinter
+ * `@bonbon/ports/node`. Sie hier zu exportieren genuegte, um `node:net` in
+ * das Webview-Buendel zu ziehen und den Bau zu brechen — ein Kommentar allein
+ * hat das nicht verhindert.
  */
 
 export {
@@ -61,7 +64,6 @@ export {
   zeitpunktText,
 } from './printer/EscPosReceiptRenderer.js'
 
-export { TcpPrinter, type TcpPrinterOptions } from './printer/TcpPrinter.js'
 export { MockPrinter, type MockFailure, type MockPrinterOptions } from './printer/MockPrinter.js'
 
 // --- Kartenzahlung ---------------------------------------------------------
@@ -112,8 +114,6 @@ export {
   parseBitmaps,
   toHex,
 } from './payment/zvt/protocol.js'
-
-export { ZvtPaymentTerminal, type ZvtPaymentOptions } from './payment/ZvtPaymentTerminal.js'
 
 // --- TSE -------------------------------------------------------------------
 

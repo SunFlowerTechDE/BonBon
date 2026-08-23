@@ -62,7 +62,12 @@ export function App(): JSX.Element {
       tseRef.current = tse
       druckerRef.current = drucker
       logRef.current = log
-      kasseRef.current = new Kasse(k, tse, drucker, log, melde)
+      const neueKasse = new Kasse(k, tse, drucker, log, melde)
+      // Vor dem ersten Bon: an die schon geschriebenen Bons anknuepfen, sonst
+      // beginnt die Belegnummer nach jedem Neustart wieder bei 1.
+      await neueKasse.knuepfeAnVorgeschichteAn()
+      if (abgebrochen) return
+      kasseRef.current = neueKasse
       setKonfiguration(k)
       setTseZustand(await tse.zustand())
       if (!laeuftInTauri()) {

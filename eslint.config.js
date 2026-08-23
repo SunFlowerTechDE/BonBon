@@ -130,9 +130,27 @@ export default tseslint.config(
     },
   },
 
-  // --- Konfigurationsdateien ------------------------------------------------
+  // --- Konfigurationsdateien und Werkzeuge ----------------------------------
+  //
+  // `werkzeuge/` enthaelt eigenstaendige Node-Skripte ohne tsconfig. Die
+  // typgestuetzten Regeln brauchen ein TypeScript-Projekt und melden sonst nur
+  // „not found by the project service" — eine Meldung ueber das Werkzeug, nicht
+  // ueber den Code. Die uebrigen Regeln greifen weiterhin.
   {
-    files: ['*.js', '*.config.ts', '*.config.js'],
+    files: ['*.js', '*.config.ts', '*.config.js', 'werkzeuge/**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: {
+        // Node-Globale. Bewusst aufgezaehlt statt ueber ein Paket geholt:
+        // es sind drei, und eine Abhaengigkeit mehr waere teurer als die Liste.
+        process: 'readonly',
+        console: 'readonly',
+        setTimeout: 'readonly',
+        // Seit Node 22 eingebaut, kein Import noetig.
+        fetch: 'readonly',
+        WebSocket: 'readonly',
+        URL: 'readonly',
+      },
+    },
   },
 )

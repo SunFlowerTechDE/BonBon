@@ -70,7 +70,7 @@ export function entwicklungsHasher(): Hasher {
 // --- Drucker ---------------------------------------------------------------
 
 /** Drucker über den Rust-Teil: TCP auf Port 9100. */
-class TauriDrucker implements PrinterPort {
+export class TauriDrucker implements PrinterPort {
   readonly info: PrinterInfo
 
   constructor(
@@ -96,11 +96,23 @@ class TauriDrucker implements PrinterPort {
     await this.print(Uint8Array.from(cashDrawerPulse()))
   }
 
+  /**
+   * Erreichbarkeit — die Antwort des Befehls, nicht sein blosses Gelingen.
+   *
+   * Hier stand vorher `await invoke(...); return true`. Der Befehl liefert bei
+   * geschlossenem Port aber `Ok(false)`, nicht einen Fehler — das Warten
+   * gelang also, und die Kasse meldete den Drucker als erreichbar, obwohl
+   * niemand lauschte. Genau die Sorte stiller Erfolgsmeldung, die Regel 8
+   * verbietet: gelungener Aufruf ist nicht dasselbe wie gelungene Sache.
+   */
   async isReachable(): Promise<boolean> {
     try {
-      await invoke('tcp_erreichbar', { host: this.host, port: this.port })
-      return true
-    } catch {
+      return await invoke<boolean>('tcp_erreichbar', { host: this.host, port: this.port })
+    } catch (fehler) {
+      // Der Aufruf selbst ist gescheitert — Namensaufloesung, IPC. Das ist ein
+      // anderer Fehler als „Port zu", macht den Drucker aber genauso wenig
+      // erreichbar. Er wird gemeldet und nicht verschluckt.
+      this.onLog('Erreichbarkeit nicht feststellbar: ' + String(fehler))
       return false
     }
   }
@@ -188,6 +200,14 @@ export interface EventLogPort {
   /** Hängt ein Ereignis an und gibt es verkettet zurück. */
   anhaengen(deviceId: string, type: string, payload: string, occurredAt: string, id: string): Promise<ChainedEvent>
   anzahl(): Promise<number>
+  /**
+   * Zaehlt die Ereignisse eines Geraets mit einem bestimmten Typ.
+   *
+   * Die Kasse liest daraus beim Start, wie viele Bons dieses Geraet schon
+   * geschrieben hat, und fuehrt die Belegnummer fort. Ohne diese Frage
+   * beginnt sie nach jedem Neustart wieder bei 1.
+   */
+  anzahlTyp(deviceId: string, type: string): Promise<number>
 }
 
 /** Event Log im Arbeitsspeicher — für den Entwicklungsbetrieb ohne Rust-Teil. */
@@ -225,6 +245,12 @@ export class SpeicherEventLog implements EventLogPort {
   async anzahl(): Promise<number> {
     return Promise.resolve(this.ereignisse.length)
   }
+
+  async anzahlTyp(deviceId: string, type: string): Promise<number> {
+    return Promise.resolve(
+      this.ereignisse.filter((e) => e.deviceId === deviceId && e.type === type).length,
+    )
+  }
 }
 
 /** Event Log über den Rust-Teil: SQLite im WAL-Modus. */
@@ -259,6 +285,10 @@ class TauriEventLog implements EventLogPort {
 
   async anzahl(): Promise<number> {
     return invoke<number>('eventlog_anzahl', { pfad: this.pfad })
+  }
+
+  async anzahlTyp(deviceId: string, type: string): Promise<number> {
+    return invoke<number>('eventlog_anzahl_typ', { pfad: this.pfad, deviceId, type })
   }
 }
 

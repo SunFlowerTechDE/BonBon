@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Dasselbe Manifest, das `tauri-build` in die Anwendungs-Exe einbettet
+  (tauri-build 2.6.3, src/windows-app-manifest.xml).
+
+  Warum es hier noch einmal steht: `tauri-build` bettet es nur in das
+  Anwendungsbinary ein, nicht in die Testbinaries. Ohne die Abhaengigkeit auf
+  Common-Controls 6.0 laedt Windows die alte ComCtl32 v5, in der
+  `TaskDialogIndirect` fehlt — tao importiert die Funktion, und das Testbinary
+  stirbt beim Laden mit STATUS_ENTRYPOINT_NOT_FOUND, bevor auch nur ein Test
+  laeuft. `build.rs` haengt diese Datei deshalb zusaetzlich an die Testziele.
+
+  Bleibt bewusst inhaltsgleich mit dem tauri-Manifest: haette der Test eine
+  andere Umgebung als die Anwendung, wuerde er etwas anderes beweisen als das,
+  was spaeter laeuft.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

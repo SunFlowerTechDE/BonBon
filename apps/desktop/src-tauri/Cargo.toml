@@ -20,6 +20,13 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
 
+# Die Testfassung von tauri stellt `tauri::test` bereit: eine echte
+# IPC-Bruecke mit Mock-Runtime. Damit laufen die Befehle im Test ueber
+# denselben Weg wie im Webview — Serialisierung der Argumente eingeschlossen.
+# Genau dort wuerde ein Vec<u8> unbemerkt verbogen.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [profile.release]
 codegen-units = 1
 lto = true
