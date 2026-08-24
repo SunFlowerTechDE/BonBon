@@ -28,6 +28,76 @@ bindet er auf `::1`; `127.0.0.1` schlägt fehl, `localhost` funktioniert.
 - TSE-Statuspunkt grün/gelb/rot im Kopf
 - Nach dem Abschluss zurück zum Raster, ohne Bestätigungsdialog
 
+## Farbwelt und Schrift
+
+Die Farbwerte stehen an **einer** Stelle: [`src/farben.ts`](src/farben.ts).
+Dort liegt nicht nur die Palette, sondern die Liste der **Flächen** — welche
+Schrift auf welchem Grund steht. Eine Farbe für sich ist weder lesbar noch
+unlesbar; lesbar ist immer nur ein Paar.
+
+| Rolle | Farbe | Schrift darauf | Kontrast |
+|---|---|---|---|
+| Anwendungshintergrund | Neutral `#F4F6F8` | dunkel | 13,55:1 |
+| Flächen, Kopf, Summe | Mint `#ABE6CF` | dunkel | 10,45:1 |
+| Auswahl, Aktiv | Türkis `#5DD5D6` | dunkel | 8,36:1 |
+| Hinweis, Rückgeld | Pfirsich `#FFC69E` | dunkel | 9,66:1 |
+| **nur** Warnung und Löschen | Koralle `#FF7D7D` | dunkel | 5,93:1 |
+| Primäraktion | Beere `#B03A6A` | **weiß** | 5,74:1 |
+
+Weiße Schrift steht **nur auf Beere**. Auf Mint, Türkis, Koralle und Pfirsich
+käme sie auf 1,40:1 bis 2,48:1 — das ist nicht knapp, das ist unlesbar.
+Koralle ist keine Aktionsfarbe: Aktionen gehen über Beere.
+
+`stil.css` schreibt die Werte noch einmal hin, weil CSS keine TypeScript-Datei
+lesen kann. [`test/farben.test.ts`](test/farben.test.ts) hält beide zusammen und
+liest dafür **das echte Stylesheet**:
+
+1. Jeder Farbwert im Stylesheet stammt aus der Palette — kein Wert nebenbei.
+2. Jede Regel, die Schrift und Grund zugleich setzt, ist als Fläche eingetragen.
+3. Jede Fläche erreicht 4,5:1 (WCAG 2.2 AA).
+
+Und weil eine Prüfung, die nicht fehlschlagen kann, nichts beweist, prüft der
+letzte Block die Prüfung selbst: weiße Schrift auf Mint **muss** durchfallen.
+Nachgestellt wurde das auch von Hand — eine eingeschmuggelte Regel
+`.probe { background: var(--mint); color: var(--weiss) }` bringt den Test zu
+Fall, ebenso ein `#f0f0f0` an der Palette vorbei.
+
+### Der TSE-Punkt ist kein Markenelement
+
+Die Zustandsanzeige benutzt **eigene Signalfarben**, keine Markenfarben. Wären
+Türkis „bereit" und Koralle „ausgefallen", wären dieselben Farben gleichzeitig
+Auswahl und Alarm — dann sagt der Farbton nichts mehr darüber, ob etwas hübsch
+oder kaputt ist.
+
+Und die Farbe steht nie allein. Rund 8 % der Männer unterscheiden Rot und Grün
+schlecht; wer den Zustand nur am Farbton ablesen müsste, sähe keinen
+Unterschied zwischen „bereit" und „ausgefallen". Jeder Zustand trägt deshalb
+**Farbe plus Zeichen plus ausgeschriebenes Wort**:
+
+| Zustand | Farbe | Zeichen | Wort |
+|---|---|---|---|
+| bereit | `#1B7A4B` | ✓ | TSE bereit |
+| gestört | `#8A5A00` | ! | TSE gestört |
+| ausgefallen | `#B02A2A` | ✕ | TSE ausgefallen |
+| unbekannt | `#8A5A00` | ? | TSE unbekannt |
+
+Der Punkt selbst hebt sich mit mindestens 3,80:1 vom Mint des Kopfes ab (WCAG
+1.4.11 verlangt 3:1 für grafische Elemente).
+
+### Schrift
+
+**Poppins** in vier Schnitten (400/500/600/700), Subsets `latin` und
+`latin-ext`, zusammen 53 kB. Die Dateien liegen in
+[`public/schriften/`](public/schriften/) und werden **mitgeliefert, nicht
+nachgeladen**: die CSP erlaubt nur `self`, und die Einrichtung im Laden
+passiert oft ohne verlässliches WLAN.
+
+Erneuern über [`werkzeuge/schriften-holen.mjs`](../../werkzeuge/schriften-holen.mjs);
+danach die `unicode-range`-Angaben in `stil.css` abgleichen. Lizenz: SIL OFL
+1.1, `public/schriften/OFL.txt`.
+
+---
+
 ## Was noch nicht dran ist
 
 Kein Rabatt in der Oberfläche, kein Bon parken, keine Bedienerverwaltung, kein

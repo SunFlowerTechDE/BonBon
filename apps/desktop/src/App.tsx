@@ -24,6 +24,7 @@ import {
 import { type PrinterPort, type TsePort, type TseZustand, euroText } from '@bonbon/ports'
 
 import { type EventLogPort, VorschauDrucker, baueDrucker, baueEventLog, baueTse, entwicklungsHasher } from './adapter.js'
+import { TSE_ANZEIGE, type TseAnzeigeStatus } from './farben.js'
 import { type Abschlussergebnis, Kasse, schnellbetraege } from './kasse.js'
 import { type Konfiguration, ladeKonfiguration, laeuftInTauri } from './konfiguration.js'
 import { ARTIKEL, WARENGRUPPEN, type Warengruppe } from './stammdaten.js'
@@ -292,19 +293,38 @@ export function App(): JSX.Element {
 
 // --- Bausteine -------------------------------------------------------------
 
+/**
+ * Zustand der TSE — Farbe **und** Zeichen **und** Wort.
+ *
+ * Vorher stand hier ein farbiger Punkt und daneben „TSE". Wer Rot und Gruen
+ * schlecht unterscheidet — rund 8 % der Maenner — konnte daran nicht ablesen,
+ * ob die Kasse signieren kann oder nicht. Jetzt traegt der Punkt ein Zeichen,
+ * und daneben steht der Zustand ausgeschrieben. Die Farbe ist die schnellste
+ * Information, aber nicht die einzige.
+ *
+ * `role="status"` statt eines blossen `div`: Vorleseprogramme melden die
+ * Aenderung dann von selbst.
+ */
 function TseAmpel({ zustand }: { zustand: TseZustand | undefined }): JSX.Element {
-  const farbe =
+  const status: TseAnzeigeStatus =
     zustand === undefined
-      ? 'grau'
+      ? 'unbekannt'
       : zustand.status === 'bereit'
-        ? 'gruen'
+        ? 'bereit'
         : zustand.status === 'gestoert'
-          ? 'gelb'
-          : 'rot'
+          ? 'gestoert'
+          : 'ausgefallen'
+  const anzeige = TSE_ANZEIGE[status]
+  const klasse =
+    anzeige.farbe === 'signalGut' ? 'gut' : anzeige.farbe === 'signalWarnung' ? 'warnung' : 'fehler'
+
   return (
-    <div className="tse" title={zustand?.meldung ?? 'TSE-Zustand unbekannt'}>
-      <span className={'punkt ' + farbe} />
-      <span>TSE</span>
+    <div className="tse" role="status" title={zustand?.meldung ?? 'TSE-Zustand unbekannt'}>
+      {/* Das Zeichen ist fuer das Auge da; vorgelesen wird das Wort daneben. */}
+      <span className={'punkt ' + klasse} aria-hidden="true">
+        {anzeige.zeichen}
+      </span>
+      <span>{anzeige.wort}</span>
     </div>
   )
 }

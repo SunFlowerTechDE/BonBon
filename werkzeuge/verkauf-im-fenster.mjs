@@ -180,10 +180,29 @@ const VERKAUF = `(async () => {
 
   const fehler = document.querySelector('.fehler')
 
+  // Darstellung: kam die mitgelieferte Schrift an, und stehen die Farben?
+  // Ein Stylesheet, das nicht ins Buendel gelangt, faellt sonst nicht auf —
+  // die Kasse rechnet ja trotzdem richtig.
+  const stil = (auswahl, eigenschaft) => {
+    const el = document.querySelector(auswahl)
+    return el ? getComputedStyle(el)[eigenschaft] : '(nicht da)'
+  }
+  const darstellung = {
+    poppinsGeladen: document.fonts.check('600 16px Poppins'),
+    schnitte: [...document.fonts].filter((f) => f.family === 'Poppins')
+      .map((f) => f.weight + '/' + f.status).sort(),
+    schriftDerKachel: stil('.artikel-kachel', 'fontFamily'),
+    kopf: stil('.kopf', 'backgroundColor'),
+    summe: stil('.summe', 'backgroundColor'),
+    tsePunkt: stil('.punkt', 'backgroundColor'),
+    tseText: document.querySelector('.tse')?.textContent ?? '(nicht da)',
+  }
+
   return {
     protokoll,
     abschluss: abschluss.textContent,
     fehler: fehler ? fehler.textContent : null,
+    darstellung,
     fuss: (document.querySelector('.fuss')?.textContent ?? '').slice(0, 4000),
   }
 })()`
@@ -230,6 +249,11 @@ async function main() {
     console.log('\n--- Abschluss ---')
     console.log('  ' + ergebnis.abschluss)
     if (ergebnis.fehler) console.log('  FEHLERMELDUNG: ' + ergebnis.fehler)
+
+    console.log('\n' + '--- Darstellung ---')
+    for (const [name, wert] of Object.entries(ergebnis.darstellung)) {
+      console.log('  ' + name.padEnd(18) + (Array.isArray(wert) ? wert.join(' ') : String(wert)))
+    }
     console.log('\n--- Protokoll der Kasse ---')
     console.log('  ' + ergebnis.fuss.replaceAll('\n', '\n  '))
 
