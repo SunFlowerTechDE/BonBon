@@ -400,6 +400,27 @@ fn datei_schreiben(pfad: String, inhalt: String) -> Result<(), String> {
     std::fs::rename(&neben, &pfad).map_err(|e| format!("Umbenennen nach {pfad} fehlgeschlagen: {e}"))
 }
 
+/// Haengt Text an eine Datei an und legt sie an, falls noetig.
+///
+/// Fuer die Diagnose-Aufzeichnung: sie waechst zeilenweise, und die ganze Datei
+/// dafuer zu lesen und neu zu schreiben wuerde mit jedem Verkauf teurer.
+///
+/// **Ausdruecklich kein `datei_schreiben` mit Vorlesen.** Der Unterschied ist
+/// nicht Bequemlichkeit: die Diagnosedatei ist die einzige, die im Betrieb
+/// unbegrenzt waechst.
+#[tauri::command]
+fn datei_anhaengen(pfad: String, inhalt: String) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut datei = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&pfad)
+        .map_err(|e| format!("Datei {pfad} nicht zu oeffnen: {e}"))?;
+    datei
+        .write_all(inhalt.as_bytes())
+        .map_err(|e| format!("Anhaengen an {pfad} fehlgeschlagen: {e}"))
+}
+
 /// Das Verzeichnis, in dem die Anwendung liegt.
 ///
 /// Dorthin gehoert die Konfiguration: jeder Laden hat eine andere Drucker-IP,
@@ -433,6 +454,7 @@ macro_rules! befehle {
             eventlog_belege,
             datei_lesen,
             datei_schreiben,
+            datei_anhaengen,
             anwendungsverzeichnis
         ]
     };

@@ -9,5 +9,8 @@
   },
   "tse": { "art": "mock" },
   "drucker": { "art": "tcp", "host": "127.0.0.1", "port": 9100, "zeichenProZeile": 48, "kassenlade": true },
-  "eventLog": { "art": "sqlite", "pfad": "bonbon-eventlog.db" }
+  "eventLog": { "art": "sqlite", "pfad": "bonbon-eventlog.db" },
+
+  "//diagnose": "Entwicklungswerkzeug. Standardmaessig aus. Bei einem Kunden nur mit ausdruecklicher Einwilligung des Betriebs — Verhaltens- und Leistungskontrolle, DSGVO und Paragraf 87 Abs. 1 Nr. 6 BetrVG. Siehe CLAUDE.md, Regel 21.",
+  "diagnose": { "art": "aus", "pfad": "bonbon-diagnose.csv" }
 }

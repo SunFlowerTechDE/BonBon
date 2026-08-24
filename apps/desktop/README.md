@@ -62,6 +62,55 @@ Jede Zuordnung ist änderbar, und die Oberfläche trägt sichtbar den Hinweis
 wirkt die Vorbelegung wie eine Auskunft, und die darf diese Software nicht
 geben (§ 5 StBerG, CLAUDE.md Regel 20).
 
+## Diagnose-Modus
+
+**Standardmäßig aus.** Einschalten in `bonbon.config.json`:
+
+```json
+"diagnose": { "art": "an", "pfad": "bonbon-diagnose.csv" }
+```
+
+Die Kasse misst sich dann selbst — ab dem **ersten Artikeltipp**, nicht ab einem
+Startknopf, damit die Überlegungszeit des Kunden nicht mitgezählt wird.
+
+| | |
+|---|---|
+| Interaktionen | jeder Artikeltipp · Umschalten Hier/Mitnehmen · Zahlung geöffnet · Betrag gewählt · Zahlart bestätigt · Raster frei |
+| Maschine | jedes Schreiben ins Event Log · TSE-Signatur · Bondruck |
+
+Nach jedem Verkauf eine Zeile im Protokoll, dazu eine CSV mit allen Einzelzeiten:
+
+```
+Diagnose BONBON-DEV-001-00021: 1.8 s gesamt · 1.6 s bis Zahlart · 0.3 s danach ·
+3 Tipps · laengste Pause 0.5 s vor "Artikel: Cappuccino" · Maschine 1040 ms
+```
+
+**Die Abstände sind der Punkt, nicht die Summe.** Eine lange Pause vor der
+Betragsbestätigung heißt etwas anderes als eine zwischen zwei Artikeln — das eine
+ist Kopfrechnen, das andere Suchen im Raster. Die CSV führt `abstand_ms` deshalb
+als eigene Spalte; eine Zahl, die man erst herleiten muss, wird nicht angesehen.
+
+### Zwei Bedingungen
+
+1. **Die Messwerte gehen nicht in den Event Log.** Der ist die steuerliche
+   Aufzeichnung. Eigene Datei, eigener Weg. Ein Test prüft, dass während eines
+   gemessenen Verkaufs kein Messwert im Log landet.
+2. **Im Verkaufspfad wird nichts angefasst.** Messen heißt: einen Zeitstempel in
+   ein Array schieben. Geschrieben wird **nach** dem Abschluss, und ein Fehler
+   dabei erreicht den Verkauf nicht. Ist der Modus aus, steht dort ein Objekt mit
+   leeren Methoden. Auch das ist geprüft: während eines gemessenen Verkaufs wird
+   keine Datei berührt.
+
+Als Uhr dient `performance.now()`, nicht die Wanduhr — wer die Systemzeit stellt,
+bekommt sonst negative Abstände.
+
+> **Entwicklungswerkzeug.** Bei einem Kunden wäre das Verhaltens- und
+> Leistungskontrolle: Rechtsgrundlage nach DSGVO, Mitbestimmung nach
+> § 87 Abs. 1 Nr. 6 BetrVG. Nie ohne ausdrückliche Einwilligung des Betriebs
+> aktivieren, keine automatische Übertragung. Siehe CLAUDE.md, Regel 21.
+
+---
+
 ## Der Umschalter richtet sich nach seiner Wirkung
 
 Bis zum 31.12.2025 entschied die Verzehrart bei fast jedem Artikel über 7 % oder

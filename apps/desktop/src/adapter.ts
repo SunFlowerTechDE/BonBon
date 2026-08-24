@@ -24,6 +24,7 @@ import {
   previewLines,
 } from '@bonbon/ports'
 
+import { CSV_KOPF } from './diagnose.js'
 import type { DruckerKonfiguration, EventLogKonfiguration, Konfiguration } from './konfiguration.js'
 import { TSE_ZUSTANDSDATEI, laeuftInTauri } from './konfiguration.js'
 
@@ -48,6 +49,8 @@ async function invoke<T>(befehl: string, argumente?: Record<string, unknown>): P
 export interface DateiPort {
   lies(pfad: string): Promise<string | undefined>
   schreib(pfad: string, inhalt: string): Promise<void>
+  /** Haengt an, legt an, falls noetig — fuer Dateien, die zeilenweise wachsen. */
+  haenge(pfad: string, inhalt: string): Promise<void>
   anwendungsverzeichnis(): Promise<string>
 }
 
@@ -58,6 +61,10 @@ class TauriDateien implements DateiPort {
 
   async schreib(pfad: string, inhalt: string): Promise<void> {
     await invoke<void>('datei_schreiben', { pfad, inhalt })
+  }
+
+  async haenge(pfad: string, inhalt: string): Promise<void> {
+    await invoke<void>('datei_anhaengen', { pfad, inhalt })
   }
 
   async anwendungsverzeichnis(): Promise<string> {
@@ -80,6 +87,11 @@ export class SpeicherDateien implements DateiPort {
     return Promise.resolve()
   }
 
+  async haenge(pfad: string, inhalt: string): Promise<void> {
+    this.inhalte.set(pfad, (this.inhalte.get(pfad) ?? '') + inhalt)
+    return Promise.resolve()
+  }
+
   async anwendungsverzeichnis(): Promise<string> {
     return Promise.resolve(this.ordner)
   }
@@ -87,6 +99,45 @@ export class SpeicherDateien implements DateiPort {
 
 export function baueDateien(): DateiPort {
   return laeuftInTauri() ? new TauriDateien() : new SpeicherDateien()
+}
+
+/**
+ * Wohin die Diagnosewerte gehen.
+ *
+ * **Nicht in den Event Log.** Der ist die steuerliche Aufzeichnung; eine
+ * Messreihe darueber, wie schnell jemand tippt, hat darin nichts zu suchen —
+ * weder rechtlich noch fachlich. Eigene Datei, eigener Weg (Regel 21).
+ */
+export class DiagnoseSenke {
+  private kopfGeschrieben = false
+
+  constructor(
+    private readonly dateien: DateiPort,
+    private readonly pfad: string,
+    private readonly onLog: (nachricht: string) => void,
+  ) {}
+
+  /**
+   * Schreibt die Messpunkte eines Verkaufs weg.
+   *
+   * Wird **nach** dem Abschluss aufgerufen und darf scheitern, ohne dass es
+   * jemanden stoert: ein Diagnosewerkzeug, das einen Verkauf zu Fall bringen
+   * kann, richtet mehr Schaden an als es Erkenntnis bringt.
+   */
+  async schreibe(zeilen: string): Promise<void> {
+    try {
+      if (!this.kopfGeschrieben) {
+        const vorhanden = await this.dateien.lies(this.pfad)
+        if (vorhanden === undefined || vorhanden === '') {
+          await this.dateien.haenge(this.pfad, CSV_KOPF)
+        }
+        this.kopfGeschrieben = true
+      }
+      await this.dateien.haenge(this.pfad, zeilen)
+    } catch (fehler) {
+      this.onLog('Diagnosewerte nicht schreibbar: ' + String(fehler))
+    }
+  }
 }
 
 // --- Hasher ----------------------------------------------------------------

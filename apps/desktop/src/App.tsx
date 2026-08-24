@@ -32,10 +32,19 @@ import {
   baueTse,
   nebenDerAnwendung,
   baueTseSpeicher,
+  DiagnoseSenke,
   entwicklungsHasher,
 } from './adapter.js'
+import {
+  KEINE_DIAGNOSE,
+  MARKE,
+  Verkaufsmessung,
+  alsCsv,
+  alsProtokollzeile,
+  werteAus,
+} from './diagnose.js'
 import { TSE_ANZEIGE, type TseAnzeigeStatus } from './farben.js'
-import { type Abschlussergebnis, Kasse, schnellbetraege } from './kasse.js'
+import { type Abschlussergebnis, Kasse, jetztMitOffset, schnellbetraege } from './kasse.js'
 import { type Konfiguration, ladeKonfiguration, laeuftInTauri } from './konfiguration.js'
 import {
   ARTIKEL,
@@ -62,6 +71,9 @@ export function App(): JSX.Element {
   const druckerRef = useRef<PrinterPort | undefined>(undefined)
   const tseRef = useRef<TsePort | undefined>(undefined)
   const logRef = useRef<EventLogPort | undefined>(undefined)
+  const senkeRef = useRef<DiagnoseSenke | undefined>(undefined)
+  /** Die Messung des laufenden Verkaufs — `undefined`, wenn der Modus aus ist. */
+  const messungRef = useRef<Verkaufsmessung | undefined>(undefined)
 
   const melde = useCallback((nachricht: string) => {
     setProtokoll((bisher) => [...bisher.slice(-40), nachricht])
@@ -95,6 +107,13 @@ export function App(): JSX.Element {
       // Bon abschliessen und offene TSE-Transaktionen aufloesen.
       await neueKasse.richteEin()
       if (abgebrochen) return
+      if (k.diagnose.art === 'an') {
+        senkeRef.current = new DiagnoseSenke(
+          dateien,
+          (await dateien.anwendungsverzeichnis()) + '/' + (k.diagnose.pfad ?? 'bonbon-diagnose.csv'),
+          melde,
+        )
+      }
       kasseRef.current = neueKasse
       setKonfiguration(k)
       setTseZustand(await tse.zustand())
@@ -130,6 +149,10 @@ export function App(): JSX.Element {
       if (kasse === undefined) return
       // Der Bon wird in der Kasse geoeffnet, nicht hier: zwei ueberlappende
       // Tipps pruefen sonst beide „ist ein Bon offen?" mit Nein.
+      //
+      // Die Messung beginnt beim **ersten Artikeltipp**, nicht bei einem
+      // Startknopf — die Ueberlegungszeit davor gehoert dem Kunden.
+      starteMessungFallsNoetig()
       void sicher(async () => {
         setBon(await kasse.tippeArtikel(artikelId, 'im-haus'))
       })
@@ -166,6 +189,8 @@ export function App(): JSX.Element {
   const abschliessen = useCallback(
     async (zahlart: 'bar' | 'karte', gegeben: Cents) => {
       if (kasse === undefined) return
+      const messung = messungRef.current
+      messung?.punkt(MARKE.zahlungsart + zahlart)
       try {
         setFehler(undefined)
         const ergebnis = await kasse.schliesseAb(zahlart, gegeben)
@@ -173,13 +198,41 @@ export function App(): JSX.Element {
         setBon(undefined)
         // Nach dem Abschluss zurueck zum Raster, ohne Bestaetigungsdialog.
         setAnsicht('raster')
+        messung?.punkt(MARKE.fertig)
+
+        // **Nach** dem Verkauf wegschreiben, nicht waehrenddessen. Bis hierhin
+        // wurden nur Zeitstempel in ein Array geschoben (Regel 6).
+        if (messung !== undefined) {
+          messungRef.current = undefined
+          kasse.setzeDiagnose(KEINE_DIAGNOSE)
+          const auswertung = werteAus(messung.messpunkte)
+          melde(alsProtokollzeile(auswertung, ergebnis.beleg.belegnummer))
+          void senkeRef.current?.schreibe(
+            alsCsv(messung.messpunkte, messung.wanduhr, ergebnis.beleg.belegnummer),
+          )
+        }
+
         if (tseRef.current !== undefined) setTseZustand(await tseRef.current.zustand())
       } catch (f) {
         setFehler(f instanceof Error ? f.message : String(f))
       }
     },
-    [kasse],
+    [kasse, melde],
   )
+
+  /**
+   * Beginnt die Messung, falls der Modus an ist und noch keine laeuft.
+   *
+   * Bewusst hier und nicht in der Kasse: die Kasse soll nicht wissen muessen,
+   * ob gemessen wird. Sie meldet nur.
+   */
+  const starteMessungFallsNoetig = useCallback(() => {
+    if (senkeRef.current === undefined || kasseRef.current === undefined) return
+    if (messungRef.current !== undefined) return
+    const messung = new Verkaufsmessung(() => performance.now(), jetztMitOffset())
+    messungRef.current = messung
+    kasseRef.current.setzeDiagnose(messung)
+  }, [])
 
   const summe = useMemo(() => (bon === undefined ? cents(0) : gesamtbetrag(bon)), [bon])
   const zeilen = useMemo(() => (bon === undefined ? [] : aktiveZeilen(bon)), [bon])
@@ -381,6 +434,7 @@ export function App(): JSX.Element {
             className="zahlen"
             disabled={zeilen.length === 0}
             onClick={() => {
+              messungRef.current?.punkt('Zahlung geoeffnet')
               setAnsicht('zahlung')
             }}
           >
@@ -392,6 +446,9 @@ export function App(): JSX.Element {
       {ansicht === 'zahlung' && bon !== undefined && (
         <Zahlungsdialog
           summe={summe}
+          onBetrag={(gegeben) => {
+            messungRef.current?.punkt('Betrag gewaehlt: ' + euroText(gegeben))
+          }}
           onAbbrechen={() => {
             setAnsicht('raster')
           }}
@@ -533,11 +590,14 @@ function Zahlungsdialog({
   summe,
   onAbbrechen,
   onBar,
+  onBetrag,
   onKarte,
 }: {
   summe: Cents
   onAbbrechen: () => void
   onBar: (gegeben: Cents) => void
+  /** Nur fuer die Messung: der Betrag wurde gewaehlt, aber noch nicht bestaetigt. */
+  onBetrag: (gegeben: Cents) => void
   onKarte: () => void
 }): JSX.Element {
   const [gegeben, setGegeben] = useState<Cents | undefined>()
@@ -557,6 +617,7 @@ function Zahlungsdialog({
               className={b === summe ? 'passend' : ''}
               onClick={() => {
                 setGegeben(b)
+                onBetrag(b)
               }}
             >
               {euroText(b)} €{b === summe ? ' (passend)' : ''}

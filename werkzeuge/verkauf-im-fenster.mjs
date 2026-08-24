@@ -143,14 +143,38 @@ const VERKAUF = `(async () => {
     protokoll.push(was + ': ' + text)
   }
 
+  /**
+   * Tippt einen Artikel und wartet, bis der Bon ihn zeigt.
+   *
+   * **Keine feste Frist.** Die Kasse arbeitet Vorgaenge nacheinander ab, und
+   * jeder schreibt ins Event Log; wie lange das dauert, haengt am Datentraeger.
+   * Ein fester Wert hat hier schon dreimal ein falsches Bild erzeugt — zuletzt
+   * stand der Bon bei 3,80 Euro, waehrend der Treiber schon zahlen wollte, und
+   * das sah aus wie ein Fehler in der Anwendung.
+   */
+  const tippe = async (bezeichnung) => {
+    const vorher = document.querySelector('.summe')?.textContent ?? ''
+    const kachel = suche('.artikel-kachel', bezeichnung)
+    if (!kachel) throw new Error('Artikel nicht gefunden: ' + bezeichnung)
+    kachel.click()
+    for (let i = 0; i < 200; i++) {
+      if ((document.querySelector('.summe')?.textContent ?? '') !== vorher) break
+      await warte(25)
+    }
+    if ((document.querySelector('.summe')?.textContent ?? '') === vorher) {
+      throw new Error('Der Bon hat sich nach 5 Sekunden nicht geaendert: ' + bezeichnung)
+    }
+    protokoll.push('Artikel: ' + bezeichnung)
+  }
+
   // Zwei Cappuccino aus den Heissgetraenken.
   await klicke('.gruppe', 'Heiß', 'Warengruppe')
-  await klicke('.artikel-kachel', 'Cappuccino', 'Artikel')
-  await klicke('.artikel-kachel', 'Cappuccino', 'Artikel')
+  await tippe('Cappuccino')
+  await tippe('Cappuccino')
 
   // Ein Kaesekuchen aus der zweiten Gruppe.
   await klicke('.gruppe', 'Kuchen', 'Warengruppe')
-  await klicke('.artikel-kachel', 'Käsekuchen', 'Artikel')
+  await tippe('Käsekuchen')
 
   const summe = document.querySelector('.summe')?.textContent ?? '(keine Summe)'
   protokoll.push('Summe im Fenster: ' + summe)

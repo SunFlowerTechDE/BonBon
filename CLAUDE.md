@@ -483,6 +483,35 @@ Deshalb: jede Bonzeile hat ihren eigenen Umschalter. Wird er benutzt, **spaltet 
 **Einzeln gesetzte Zeilen sind sichtbar zu kennzeichnen.** Sonst wundert sich das Personal, warum der große Schalter manche Zeilen nicht ändert — und hält es für einen Fehler.
 
 
+
+### 21. Der Diagnose-Modus ist ein Entwicklungswerkzeug
+
+Die Kasse kann sich selbst vermessen: Zeitstempel für jeden Artikeltipp, jedes Umschalten, die Wahl der Zahlungsart, die Bestätigung des Betrags, das Freiwerden des Rasters — dazu getrennt die Maschinenphasen TSE-Signatur, Event Log und Bondruck. Auf dem Entwicklungsrechner ist das harmlos und nützlich.
+
+**Bei einem Kunden ist es etwas anderes.** Zu messen, wie schnell eine Aushilfe kassiert, ist Verhaltens- und Leistungskontrolle. Das braucht in Deutschland eine Rechtsgrundlage nach DSGVO und, wo ein Betriebsrat besteht, dessen Mitbestimmung nach **§ 87 Abs. 1 Nr. 6 BetrVG** — der greift bereits, wenn eine Einrichtung zur Überwachung *objektiv geeignet* ist; auf die Absicht kommt es nicht an. Eine Kasse, die Sekundenabstände je Bedienvorgang aufzeichnet, ist das.
+
+Daraus vier Bedingungen, alle vier nicht verhandelbar:
+
+1. **In ausgelieferten Fassungen standardmäßig aus.** Ein Vorgabewert `an` wäre kein Bequemlichkeitsdetail, sondern ein Rechtsproblem. Ein Test hält den Vorgabewert fest.
+2. **Nie ohne ausdrückliche Einwilligung des Betriebs aktiviert.** Nicht durch uns, nicht aus der Ferne, nicht „zur Fehlersuche" beiläufig mitgeschaltet. Wer ihn einschaltet, tut es selbst und weiß, was er tut — die Anwendung sagt es beim Start noch einmal laut ins Protokoll.
+3. **Die Daten bleiben lokal.** Keine automatische Übertragung an uns, in keiner Form, auch nicht aggregiert. Wer uns eine Messreihe schicken will, schickt die Datei.
+4. **Keine Personenbezüge.** Gemessen werden Vorgänge, nicht Personen. Solange es keine Bedienerverwaltung gibt, ist das leicht einzuhalten — kommt eine, gehört diese Regel neu bewertet, bevor der Modus jemanden zuordnen kann.
+
+### Zwei technische Bedingungen, die den Entwurf bestimmen
+
+**Die Messwerte gehen nicht in den Event Log.** Der ist die steuerliche Aufzeichnung nach § 146a AO; Diagnosedaten haben darin nichts zu suchen — weder rechtlich noch fachlich. Eigene Datei, eigener Speicher, eigenes Format. Ein Test prüft, dass während eines gemessenen Verkaufs kein Messwert im Log landet.
+
+**Nichts davon darf im Verkaufspfad bremsen oder blockieren (Regel 6).** Messen heißt: einen Zeitstempel in ein Array schieben. Keine Datei, kein `await`, keine Formatierung während des Verkaufs. Geschrieben wird **nach** dem Abschluss, und ein Fehler dabei erreicht den Verkauf nicht. Ist der Modus aus, steht an der Stelle ein Objekt mit leeren Methoden — der Verkaufspfad zahlt dafür nichts. Auch das ist geprüft: während eines gemessenen Verkaufs wird keine Datei angefasst.
+
+### Gemessen werden Abstände, nicht nur Summen
+
+Eine Gesamtdauer sagt wenig. Eine lange Pause **vor der Betragsbestätigung** heißt etwas anderes als eine lange Pause **zwischen zwei Artikeln**: das eine ist Kopfrechnen, das andere Suchen im Raster. Die Auswertung nennt deshalb die längste Pause **und wovor sie lag**, und die CSV führt den Abstand als eigene Spalte — eine Zahl, die man erst herleiten muss, wird nicht angesehen.
+
+Die Messung beginnt beim **ersten Artikeltipp**, nicht bei einem Startknopf. Sonst misst man die Überlegungszeit des Kunden mit, und die gehört ihm, nicht der Kasse.
+
+Als Uhr dient eine **monotone** Quelle, nicht die Wanduhr. Wer die Systemzeit stellt oder eine Zeitumstellung erwischt, bekommt sonst negative Abstände — derselbe Fehler wie bei den TSE-Zeitstempeln in Regel 11, nur an anderer Stelle.
+
+
 ---
 
 ## Struktur

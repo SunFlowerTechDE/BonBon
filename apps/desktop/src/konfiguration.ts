@@ -38,6 +38,21 @@ export interface EventLogKonfiguration {
   readonly pfad?: string
 }
 
+/**
+ * Diagnose-Modus — ein **Entwicklungswerkzeug**.
+ *
+ * Standardmäßig aus, und das ist keine Bequemlichkeitsentscheidung: bei einem
+ * Kunden zu messen, wie schnell eine Aushilfe kassiert, ist Verhaltens- und
+ * Leistungskontrolle. Das braucht eine Rechtsgrundlage nach DSGVO und, wo ein
+ * Betriebsrat besteht, dessen Mitbestimmung nach § 87 Abs. 1 Nr. 6 BetrVG.
+ * Siehe CLAUDE.md, Regel 21.
+ */
+export interface DiagnoseKonfiguration {
+  readonly art: 'aus' | 'an'
+  /** Wohin die CSV geschrieben wird. Relativ heißt: neben die Anwendung. */
+  readonly pfad?: string
+}
+
 export interface Konfiguration {
   readonly kasse: {
     readonly deviceId: string
@@ -48,6 +63,7 @@ export interface Konfiguration {
   readonly tse: TseKonfiguration
   readonly drucker: DruckerKonfiguration
   readonly eventLog: EventLogKonfiguration
+  readonly diagnose: DiagnoseKonfiguration
 }
 
 /**
@@ -70,6 +86,8 @@ export const VORGABE: Konfiguration = {
   tse: { art: 'mock' },
   drucker: { art: 'vorschau', zeichenProZeile: 48, kassenlade: true },
   eventLog: { art: 'speicher' },
+  // Aus. Immer. Wer misst, schaltet es bewusst ein (Regel 21).
+  diagnose: { art: 'aus', pfad: 'bonbon-diagnose.csv' },
 }
 
 /** Läuft die App im Tauri-Fenster oder nur im Browser? */
@@ -146,12 +164,23 @@ export async function ladeKonfiguration(
     tse: { ...VORGABE.tse, ...gelesen.tse },
     drucker: { ...VORGABE.drucker, ...gelesen.drucker },
     eventLog: { ...VORGABE.eventLog, ...gelesen.eventLog },
+    diagnose: { ...VORGABE.diagnose, ...gelesen.diagnose },
   }
   melde(
     'Konfiguration aus ' + pfad + ': TSE ' + zusammengefuehrt.tse.art +
       ', Drucker ' + zusammengefuehrt.drucker.art +
       ', Event Log ' + zusammengefuehrt.eventLog.art,
   )
+  if (zusammengefuehrt.diagnose.art === 'an') {
+    // Laut, nicht beilaeufig: ein eingeschalteter Diagnose-Modus muss sichtbar
+    // sein, sonst misst er unbemerkt mit.
+    melde(
+      'DIAGNOSE-MODUS IST AN — Zeiten werden nach ' +
+        (zusammengefuehrt.diagnose.pfad ?? 'bonbon-diagnose.csv') +
+        ' geschrieben. Entwicklungswerkzeug; bei einem Kunden nur mit ' +
+        'ausdruecklicher Einwilligung des Betriebs (Regel 21).',
+    )
+  }
   return zusammengefuehrt
 }
 

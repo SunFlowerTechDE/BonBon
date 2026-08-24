@@ -61,6 +61,7 @@ import { EscPosReceiptRenderer, type PrinterPort, type TsePort } from '@bonbon/p
 
 import type { EventLogPort } from './adapter.js'
 import type { Konfiguration } from './konfiguration.js'
+import { KEINE_DIAGNOSE, MARKE, type Diagnose } from './diagnose.js'
 import { artikel, steuersatzregel } from './stammdaten.js'
 
 export interface Abschlussergebnis {
@@ -140,6 +141,13 @@ export class Kasse {
   private tseTransaktion: string | undefined
   /** Warum keine geoeffnet werden konnte — geht auf den Beleg (Regel 8). */
   private tseBeginnAusfall: string | undefined
+  /**
+   * Die Messung des laufenden Verkaufs.
+   *
+   * Ist der Diagnose-Modus aus, steht hier `KEINE_DIAGNOSE` — drei leere
+   * Methoden. Der Verkaufspfad zahlt dafuer nichts (Regel 6).
+   */
+  private diagnose: Diagnose = KEINE_DIAGNOSE
 
   constructor(
     private readonly konfiguration: Konfiguration,
@@ -196,6 +204,16 @@ export class Kasse {
     return this.bon?.zustand === 'offen'
   }
 
+  /**
+   * Setzt die Messung fuer den naechsten Verkauf.
+   *
+   * Die Anwendung entscheidet, ob und wann gemessen wird — die Kasse meldet
+   * nur. So bleibt der Verkaufspfad frei von der Frage, ob der Modus an ist.
+   */
+  setzeDiagnose(diagnose: Diagnose): void {
+    this.diagnose = diagnose
+  }
+
   /** Die TSE-Transaktion des laufenden Bons — fuer Tests und Anzeige. */
   get laufendeTransaktion(): string | undefined {
     return this.tseTransaktion
@@ -213,6 +231,7 @@ export class Kasse {
   private async schreibe(...neue: SaleEventData[]): Promise<Bon> {
     let laufend = this.ereignisse.length
     for (const ereignis of neue) {
+      const fertig = this.diagnose.beginne('Event Log: ' + ereignis.type)
       await this.eventLog.anhaengen(
         this.konfiguration.kasse.deviceId,
         ereignis.type,
@@ -221,6 +240,7 @@ export class Kasse {
         ereignis.saleId + '-' + String(laufend).padStart(3, '0'),
         ereignis.saleId,
       )
+      fertig()
       laufend += 1
     }
     this.ereignisse = [...this.ereignisse, ...neue]
@@ -738,7 +758,11 @@ export class Kasse {
       // zwei ueberlappende Tipps beide „ist ein Bon offen?" mit Nein und
       // eroeffnen zwei.
       if (this.bon === undefined || !this.offen) await this.beginneBonIntern(vorgabe)
-      return this.tippeArtikelIntern(artikelId)
+      const bon = await this.tippeArtikelIntern(artikelId)
+      // Nach dem Schreiben gemeldet, nicht davor: der Messpunkt soll den
+      // Zeitpunkt tragen, zu dem die Position wirklich erfasst war.
+      this.diagnose.punkt(MARKE.artikel + artikel(artikelId).bezeichnung)
+      return bon
     })
   }
 
@@ -798,9 +822,11 @@ export class Kasse {
   ): Promise<Bon> {
     return this.reihum(async () => {
       const bon = this.verlangeOffenenBon()
-      return this.schreibe(
+      const geteilt = await this.schreibe(
         ...setzeVerzehrartFuerPosition(bon, this.kontext(), lineId, menge, verzehrart, steuersatzregel),
       )
+      this.diagnose.punkt('Verzehrart je Position: ' + verzehrart)
+      return geteilt
     })
   }
 
@@ -818,7 +844,11 @@ export class Kasse {
       if (this.bon === undefined || !this.offen) return this.beginneBonIntern(neu)
       const bon = this.verlangeOffenenBon()
       if (bon.verzehrart === neu) return bon
-      return this.schreibe(wechsleVerzehrart(bon, this.kontext(), neu, steuersatzregel))
+      const gewechselt = await this.schreibe(
+        wechsleVerzehrart(bon, this.kontext(), neu, steuersatzregel),
+      )
+      this.diagnose.punkt('Verzehrart: ' + neu)
+      return gewechselt
     })
   }
 
@@ -859,6 +889,7 @@ export class Kasse {
     bon = await this.schreibe(ende)
 
     // --- TSE ---
+    const tseFertig = this.diagnose.beginne('TSE-Signatur')
     const ergebnis = await this.tse.signiere({
       belegreferenz: bon.saleId,
       kassenSeriennummer: this.konfiguration.kasse.seriennummer,
@@ -866,6 +897,7 @@ export class Kasse {
       umsaetze: umsaetzeAus(bonSteuerausweis(bon)),
       zahlungen: [{ art: zahlart === 'bar' ? 'Bar' : 'Unbar', betrag: ende.gesamtbetrag }],
     })
+    tseFertig()
     this.tseTransaktion = undefined
 
     const signatur: TseSignatur | undefined =
@@ -914,6 +946,7 @@ export class Kasse {
 
     let gedruckt = false
     let druckfehler: string | undefined
+    const druckFertig = this.diagnose.beginne('Bondruck')
     try {
       const bytes = new EscPosReceiptRenderer({
         charactersPerLine: this.drucker.info.charactersPerLine,
@@ -929,6 +962,7 @@ export class Kasse {
       druckfehler = fehler instanceof Error ? fehler.message : String(fehler)
       this.onLog('Bondruck fehlgeschlagen: ' + druckfehler)
     }
+    druckFertig()
 
     return {
       beleg,
