@@ -62,6 +62,56 @@ Jede Zuordnung ist änderbar, und die Oberfläche trägt sichtbar den Hinweis
 wirkt die Vorbelegung wie eine Auskunft, und die darf diese Software nicht
 geben (§ 5 StBerG, CLAUDE.md Regel 20).
 
+## Der Umschalter richtet sich nach seiner Wirkung
+
+Bis zum 31.12.2025 entschied die Verzehrart bei fast jedem Artikel über 7 % oder
+19 % — der Umschalter war die wichtigste Einzelinteraktion der App. **Seit dem
+1.1.2026 ist er das nicht mehr:** § 12 Abs. 2 Nr. 15 UStG stellt Speisen dauerhaft
+auf den ermäßigten Satz, Getränke bleiben beim Regelsatz. Übrig bleibt das
+Milchmischgetränk ab 75 % Milchanteil — im Sortiment **ein Artikel von zwölf**.
+
+Deshalb:
+
+- Enthält der Bon einen Artikel, bei dem die Verzehrart den Satz ändert, steht
+  der Schalter **prominent**.
+- Sonst bleibt er **klein**, mit einem Satz dazu („Ändert bei diesen Artikeln den
+  Steuersatz nicht — wird aber trotzdem aufgezeichnet"). Ohne den sieht es aus,
+  als sei er kaputt.
+- **Klein heißt klein, nicht weg.** Die Verzehrart ist aufzuzeichnen, ob sie den
+  Satz bewegt oder nicht; ein `display: none` wäre hier ein fachlicher Fehler.
+  Ein Test prüft genau das gegen das Stylesheet.
+
+Das verhindert auch, dass jemand den Schalter aus Gewohnheit betätigt, wo er
+folgenlos ist. Bei einer steuerlich relevanten Angabe ist Gewohnheit das falsche
+Werkzeug.
+
+### Er springt nicht
+
+Zwei Vorkehrungen, beide im Fenster nachgemessen:
+
+1. **Feste Zeilenhöhe.** Was sich ändert, ist das Gewicht der Knöpfe, nicht der
+   Platz, den die Zeile einnimmt. Sonst ruckt das Artikelraster hoch, sobald die
+   erste Latte im Bon landet — mitten im Tippen.
+2. **Er wird während eines Bons nie kleiner.** Wer die letzte Latte wieder
+   entfernt, soll den Schalter nicht unter dem Finger schrumpfen sehen.
+   Zurückgesetzt wird beim nächsten Bon.
+
+```
+node werkzeuge/verkauf-im-fenster.mjs --umschalter
+
+leerer Bon                Hoehe 84 px · Knopf  97 px · klein     · sichtbar true
+nur Kuchen                Hoehe 84 px · Knopf  97 px · klein     · sichtbar true
+mit Latte Macchiato       Hoehe 84 px · Knopf 620 px · prominent · sichtbar true
+Latte wieder entfernt     Hoehe 84 px · Knopf 620 px · prominent · sichtbar true
+Hoehe konstant: true
+```
+
+Der erste Anlauf hatte `min-height: 4.1rem` — bemessen am kleinen Zustand. Die
+Zeile sprang dadurch von 66 auf 82 px. Die Messung hat es gezeigt, nicht das
+Auge.
+
+---
+
 ## Verzehrart je Position
 
 „Zwei Cappuccino, einer bleibt hier, einer geht" ist im Café Alltag. Weil die

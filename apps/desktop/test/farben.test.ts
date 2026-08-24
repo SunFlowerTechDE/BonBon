@@ -184,6 +184,25 @@ describe('Zustandsanzeige', () => {
   })
 })
 
+describe('Der Umschalter bleibt erreichbar', () => {
+  it('wird im kleinen Zustand kleiner, aber nicht unsichtbar', () => {
+    // „Klein" heisst klein, nicht weg: die Verzehrart ist aufzuzeichnen, ob
+    // sie den Steuersatz bewegt oder nicht. Ein `display: none` waere hier
+    // ein fachlicher Fehler, kein Gestaltungsdetail.
+    const regel = /\.verzehrart\.klein button \{([^}]*)\}/.exec(STIL)?.[1] ?? ''
+    expect(regel).not.toBe('')
+    expect(regel).not.toMatch(/display:\s*none/)
+    expect(regel).not.toMatch(/visibility:\s*hidden/)
+  })
+
+  it('haelt die Zeilenhoehe fest, damit nichts springt', () => {
+    // Ohne feste Hoehe ruckt das Artikelraster hoch, sobald die erste Latte
+    // im Bon landet — mitten im Tippen.
+    const regel = /\.verzehrart \{([^}]*)\}/.exec(STIL)?.[1] ?? ''
+    expect(regel).toMatch(/min-height:/)
+  })
+})
+
 describe('Die Pruefung kann fehlschlagen', () => {
   it('erkennt weisse Schrift auf Mint als unlesbar', () => {
     // 1,40:1. Ohne diesen Test waere nicht gezeigt, dass die Rechnung oben

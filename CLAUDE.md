@@ -61,9 +61,19 @@ Negative Beträge sind erlaubt — Stornos und Rabatte brauchen sie.
 
 ### 4. Der Steuersatz ist kein Feld am Produkt
 
-Er ist eine Funktion aus `(Produkt, Verzehrart, Datum)`. Die Verzehrart („hier essen" vs. „mitnehmen") entscheidet über 7 % oder 19 % und ist für diese Zielgruppe die wichtigste Einzelinteraktion der ganzen App.
+Er ist eine Funktion aus `(Produkt, Verzehrart, Datum)`.
 
-**Seit dem 1. Januar 2026 gilt das nur noch für Milchmischgetränke** (§ 12 Abs. 2 Nr. 15 UStG): Speisen sind in beiden Verzehrarten ermäßigt, Getränke in beiden Fällen Regelsatz. Die Verzehrart bleibt trotzdem aufzeichnungspflichtig und bleibt die wichtigste Einzelinteraktion — siehe Regel 20 für die Tabelle mit Fundstellen.
+### Was die Verzehrart heute noch bewirkt — und was nicht mehr
+
+Bis zum 31. Dezember 2025 entschied die Verzehrart („hier essen" vs. „mitnehmen") bei fast jedem Artikel über 7 % oder 19 %, und der Umschalter war damit **die wichtigste Einzelinteraktion der ganzen App**. Dieser Satz stand hier, und er war richtig.
+
+**Er ist es seit dem 1. Januar 2026 nicht mehr.** § 12 Abs. 2 Nr. 15 UStG (eingefügt durch das Steueränderungsgesetz 2025) stellt Speisen in der Gastronomie dauerhaft auf den ermäßigten Satz — unabhängig von der Verzehrart. Getränke bleiben in beiden Fällen beim Regelsatz. Der Umschalter bewegt den Steuersatz seitdem **nur noch bei Milchmischgetränken ab 75 % Milchanteil**: in einem Café zwei bis vier Artikel von zwanzig.
+
+**Das Recht hat sich geändert, nicht die Einschätzung.** Wer die alte Formulierung wiederfindet, findet einen überholten Stand, keinen anderen Blickwinkel. Die Fundstellen stehen in Regel 20.
+
+Daraus folgt für die Oberfläche: der Umschalter **richtet sich nach seiner Wirkung**. Enthält der Bon einen Artikel, bei dem die Verzehrart den Satz ändert, steht er prominent; sonst bleibt er klein und unauffällig — erreichbar, aber nicht mehr im Weg. Das verhindert auch, dass jemand ihn aus Gewohnheit betätigt, wo er folgenlos ist.
+
+**Aufzuzeichnen bleibt sie in jedem Fall.** Die DSFinV-K will die Verzehrart sehen, ob sie den Satz bewegt oder nicht.
 
 Sie wird **pro Bon** gesetzt und ist **pro Position überschreibbar**. Und: Die Entscheidung wird im Event Log mitgeschrieben, nicht nur das Ergebnis — bei einer Prüfung muss nachvollziehbar sein, *warum* 7 % berechnet wurden.
 
@@ -334,7 +344,7 @@ Das ist richtig: Der Rabatt bezieht sich auf das, was der Kunde tatsächlich zah
 
 ### Die Verzehrart des Bons ist umschaltbar — über ein eigenes Ereignis
 
-Regel 1 verbietet die **stille** Änderung, nicht die Änderung. `DiningModeChanged` ist der vorgesehene Weg, und der Umschalter „Hier essen / Mitnehmen" ist laut Regel 4 die wichtigste Einzelinteraktion der ganzen App.
+Regel 1 verbietet die **stille** Änderung, nicht die Änderung. `DiningModeChanged` ist der vorgesehene Weg.
 
 Drei Bedingungen:
 
@@ -445,9 +455,24 @@ Gefunden im M2-Sortiment, nachgeschlagen statt angenommen:
 
 Fundstellen: § 12 Abs. 2 Nr. 15 UStG (Steueränderungsgesetz 2025, seit 1.1.2026) · Anlage 2 Nr. 4 und Nr. 34 zu § 12 Abs. 2 Nr. 1 UStG · FG Baden-Württemberg, Urteil vom 14.3.2024, 1 K 232/24.
 
-**Seit dem 1. Januar 2026 bewegt die Verzehrart den Steuersatz nur noch bei Milchmischgetränken.** Speisen sind in beiden Fällen ermäßigt, Getränke in beiden Fällen Regelsatz. Der große Umschalter bleibt trotzdem die wichtigste Einzelinteraktion (Regel 4) — er entscheidet weiterhin über den einen Fall, der im Café täglich vorkommt, und die DSFinV-K will die Verzehrart ohnehin aufgezeichnet sehen.
+**Seit dem 1. Januar 2026 bewegt die Verzehrart den Steuersatz nur noch bei Milchmischgetränken.** Speisen sind in beiden Fällen ermäßigt, Getränke in beiden Fällen Regelsatz. Was das für den Umschalter heißt, steht in Regel 4.
 
-**Der Parameter `zeitpunkt` ist deswegen keine Zierde.** Ein Export für einen Zeitraum vor 2026 braucht die damaligen Sätze. Die Vorbelegung bildet heute nur den aktuellen Stand ab; das ist eine bekannte Lücke und gehört nach M4.
+### Der Zeitbezug hat jetzt einen konkreten Stichtag
+
+**Der Parameter `zeitpunkt` ist keine Zierde.** Er wird bisher nicht ausgewertet; die Vorbelegung bildet nur den Stand ab 1.1.2026 ab. Ein DSFinV-K-Export für einen Zeitraum davor bekäme die heutigen Sätze — und damit falsche.
+
+Diese Lücke war bis zum 1. Januar 2026 theoretisch. Jetzt ist sie es nicht mehr, und der erste echte Stichtag steht fest. **Testfall für M4**, an einem realen Fall statt an einem erfundenen:
+
+| Zeitpunkt | Artikel | Verzehrart | erwarteter Satz |
+|---|---|---|---|
+| `2025-12-31T23:00:00+01:00` | Käsekuchen | im Haus | **19 %** |
+| `2025-12-31T23:00:00+01:00` | Käsekuchen | außer Haus | 7 % |
+| `2026-01-01T00:00:00+01:00` | Käsekuchen | im Haus | **7 %** |
+| `2026-01-01T00:00:00+01:00` | Käsekuchen | außer Haus | 7 % |
+| beide | Latte Macchiato | außer Haus | 7 % — unverändert |
+| beide | Kaffee | beide | 19 % — unverändert |
+
+Die Silvesternacht ist dabei kein Zufallsdatum: für sie gilt vereinfachend, dass für die ganze Nacht noch der Satz von 2025 angewandt werden kann. Ein Zeitbezug, der nur auf das Kalenderdatum sieht, trifft diesen Fall nicht — und genau daran soll die M4-Umsetzung gemessen werden.
 
 ### Eine Position darf von der Verzehrart des Bons abweichen — und das muss erreichbar sein
 
@@ -564,7 +589,7 @@ Wer eine Zeile aus der unteren Tabelle in die obere verschiebt, bringt das Werkz
 | **M1** | `@bonbon/core` — Bonberechnung, Steuerlogik, Rabatte, Rundung, Event-Typen. Keine UI |
 | **M2** | Tauri-App, Artikelraster, Bon, Bardruck. Vollständig offline |
 | **M3** | Backend, Sync, TSE, Ausfallpfad, Signaturdaten auf dem Beleg. Dazu die Entscheidung `synchronous NORMAL` gegen `FULL` — siehe [offene Punkte](tools/eventlog-bench/README.md#offene-punkte) |
-| **M4** | Tagesabschluss, Kassensturz, DSFinV-K-Export, ELSTER-Meldeassistent |
+| **M4** | Tagesabschluss, Kassensturz, DSFinV-K-Export, ELSTER-Meldeassistent. Dazu der **Zeitbezug der Steuersätze** — Testfall ist der Stichtag 1.1.2026, siehe Regel 20 |
 | **M5** | ZVT-Kartenzahlung, ein Terminalmodell |
 | **M6** | Pilotbetrieb mit echten Geräten |
 

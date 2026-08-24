@@ -213,10 +213,26 @@ select {
 
 /* --- Verzehrart: gross und dauersichtbar ----------------------------------- */
 
+/*
+ * Die Zeile behaelt ihre Hoehe in **beiden** Zustaenden.
+ *
+ * Sonst baute die Kasse ihr Layout um, waehrend jemand tippt: der Artikelrast
+ * darunter ruckte hoch, sobald die erste Latte im Bon landet. Was sich aendert,
+ * ist das Gewicht der Knoepfe, nicht der Platz, den die Zeile einnimmt — und
+ * das mit einem Uebergang statt einem Sprung.
+ */
 .verzehrart {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
   padding: 0.75rem 1rem;
+  /*
+   * Bemessen am **prominenten** Zustand, nicht am kleinen: der ist der
+   * hoehere, und die Zeile soll in beiden gleich hoch sein. Mit 4,1rem sprang
+   * sie im Fenster gemessen von 66 auf 82 px, sobald die erste Latte im Bon
+   * landete — genau der Umbau, der nicht passieren soll.
+   */
+  min-height: 5.25rem;
   background: var(--weiss);
   color: var(--text);
   border-bottom: 1px solid var(--rahmen);
@@ -231,6 +247,27 @@ select {
   border-radius: var(--radius);
   background: var(--weiss);
   color: var(--text);
+  transition: flex-grow 160ms ease, padding 160ms ease, font-size 160ms ease;
+}
+
+/*
+ * Klein heisst klein, nicht weg. Die Verzehrart ist aufzuzeichnen, ob sie den
+ * Steuersatz bewegt oder nicht — sie muss also erreichbar bleiben.
+ */
+.verzehrart.klein button {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+}
+.verzehrart .folgenlos {
+  font-size: 0.75rem;
+  color: var(--gedaempft);
+  margin-left: 0.25rem;
+}
+
+/* Wer das Umschalten nicht sehen will, bekommt es auch nicht. */
+@media (prefers-reduced-motion: reduce) {
+  .verzehrart button { transition: none; }
 }
 .verzehrart button.gewaehlt {
   background: var(--tuerkis);

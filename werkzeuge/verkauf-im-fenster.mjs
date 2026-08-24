@@ -348,10 +348,71 @@ async function stelleSicherDassNichtsLaeuft() {
   throw new Error(`Am Port ${PORT} antwortet weiterhin jemand — alte Instanz nicht beendet.`)
 }
 
+/**
+ * Misst den Umschalter in beiden Zustaenden — und die Hoehe dazwischen.
+ *
+ * Der Punkt ist nicht die Optik, sondern dass die Zeile ihre Hoehe behaelt:
+ * sonst ruckt das Artikelraster hoch, sobald die erste Latte im Bon landet.
+ */
+const UMSCHALTER = `(async () => {
+  const warte = (ms) => new Promise((r) => setTimeout(r, ms))
+  const suche = (auswahl, text) =>
+    [...document.querySelectorAll(auswahl)].find((e) => e.textContent.includes(text))
+  const protokoll = []
+
+  const messe = (wann) => {
+    const zeile = document.querySelector('.verzehrart')
+    const knopf = document.querySelector('.verzehrart button')
+    protokoll.push(
+      wann.padEnd(26) +
+        'Hoehe ' + Math.round(zeile.getBoundingClientRect().height) + ' px' +
+        ' · Knopf ' + Math.round(knopf.getBoundingClientRect().width) + ' px' +
+        ' · ' + (zeile.classList.contains('klein') ? 'klein' : 'prominent') +
+        ' · sichtbar ' + (getComputedStyle(knopf).display !== 'none'),
+    )
+    return Math.round(zeile.getBoundingClientRect().height)
+  }
+
+  const leer = messe('leerer Bon')
+
+  // Kuchen liegt in der zweiten Warengruppe.
+  suche('.gruppe', 'Kuchen').click(); await warte(250)
+  suche('.artikel-kachel', 'Käsekuchen').click()
+  await warte(400)
+  const nurSpeise = messe('nur Kuchen')
+  protokoll.push('Hinweis: ' + (document.querySelector('.folgenlos')?.textContent ?? '(keiner)'))
+
+  suche('.gruppe', 'Heiß').click(); await warte(200)
+  suche('.artikel-kachel', 'Latte Macchiato').click()
+  await warte(600)
+  const mitLatte = messe('mit Latte Macchiato')
+
+  // Latte wieder entfernen — der Schalter darf jetzt NICHT unter dem Finger
+  // kleiner werden.
+  const weg = [...document.querySelectorAll('.bonzeilen li')]
+    .find((li) => li.textContent.includes('Latte'))?.querySelector('.weg')
+  if (weg) { weg.click(); await warte(500) }
+  const nachEntfernen = messe('Latte wieder entfernt')
+
+  protokoll.push('Hoehe konstant: ' + (leer === nurSpeise && nurSpeise === mitLatte && mitLatte === nachEntfernen))
+
+  document.querySelector('.verwerfen')?.click()
+  await warte(500)
+
+  return {
+    protokoll,
+    abschluss: 'Umschalter vermessen',
+    fehler: document.querySelector('.fehler')?.textContent ?? null,
+    darstellung: {},
+    fuss: '',
+  }
+})()`
+
 async function main() {
   const argumente = process.argv.slice(2)
   const absturz = argumente.includes('--absturz')
   const geteilt = argumente.includes('--geteilt')
+  const umschalter = argumente.includes('--umschalter')
   const pfad = argumente.find((a) => !a.startsWith('--'))
   const exe = pfad ? resolve(pfad) : STANDARD_EXE
   if (!existsSync(exe)) {
@@ -388,7 +449,7 @@ async function main() {
       await warte(100)
     }
 
-    const ergebnis = await steuerung.werteAus(absturz ? BON_OEFFNEN : geteilt ? GETEILTE_ZEILE : VERKAUF)
+    const ergebnis = await steuerung.werteAus(absturz ? BON_OEFFNEN : geteilt ? GETEILTE_ZEILE : umschalter ? UMSCHALTER : VERKAUF)
 
     console.log('\n--- Verkauf ---')
     for (const zeile of ergebnis.protokoll) console.log('  ' + zeile)

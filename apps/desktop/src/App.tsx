@@ -37,7 +37,14 @@ import {
 import { TSE_ANZEIGE, type TseAnzeigeStatus } from './farben.js'
 import { type Abschlussergebnis, Kasse, schnellbetraege } from './kasse.js'
 import { type Konfiguration, ladeKonfiguration, laeuftInTauri } from './konfiguration.js'
-import { ARTIKEL, STEUERHINWEIS, WARENGRUPPEN, type Warengruppe } from './stammdaten.js'
+import {
+  ARTIKEL,
+  STEUERHINWEIS,
+  VERZEHRART_FOLGENLOS,
+  WARENGRUPPEN,
+  type Warengruppe,
+  verzehrartAendertSatz,
+} from './stammdaten.js'
 
 type Ansicht = 'raster' | 'zahlung'
 
@@ -178,6 +185,26 @@ export function App(): JSX.Element {
   const zeilen = useMemo(() => (bon === undefined ? [] : aktiveZeilen(bon)), [bon])
   const ausweis = useMemo(() => (bon === undefined ? [] : bonSteuerausweis(bon)), [bon])
 
+  /**
+   * Bewirkt die Verzehrart auf diesem Bon ueberhaupt etwas?
+   *
+   * Der Wert waechst waehrend eines Bons nur, er schrumpft nie: wer die letzte
+   * Latte wieder entfernt, soll den Schalter nicht unter dem Finger kleiner
+   * werden sehen. Zurueckgesetzt wird beim naechsten Bon.
+   */
+  const verzehrartWirksam = useMemo(
+    () => zeilen.some((z) => verzehrartAendertSatz(z.artikelId)),
+    [zeilen],
+  )
+  const [verzehrartProminent, setVerzehrartProminent] = useState(false)
+  const [prominentFuerBon, setProminentFuerBon] = useState<string | undefined>(undefined)
+  if (prominentFuerBon !== bon?.saleId) {
+    setProminentFuerBon(bon?.saleId)
+    setVerzehrartProminent(verzehrartWirksam)
+  } else if (verzehrartWirksam && !verzehrartProminent) {
+    setVerzehrartProminent(true)
+  }
+
   if (konfiguration === undefined) {
     return <div className="laden">Kasse wird eingerichtet …</div>
   }
@@ -196,6 +223,7 @@ export function App(): JSX.Element {
         aktuell={bon?.verzehrart}
         onWaehle={verzehrartSetzen}
         gesperrt={kasse === undefined}
+        prominent={verzehrartProminent}
       />
 
       <main className="hauptbereich">
@@ -440,17 +468,38 @@ function TseAmpel({ zustand }: { zustand: TseZustand | undefined }): JSX.Element
   )
 }
 
+/**
+ * Der Umschalter richtet sich nach seiner Wirkung.
+ *
+ * Bis zum 31.12.2025 entschied die Verzehrart bei fast jedem Artikel ueber
+ * 7 % oder 19 %. Seit dem 1.1.2026 (§ 12 Abs. 2 Nr. 15 UStG) sind Speisen in
+ * beiden Faellen ermaessigt und Getraenke in beiden Faellen Regelsatz — uebrig
+ * bleibt das Milchmischgetraenk ab 75 % Milchanteil.
+ *
+ * Ein Schalter, der bei jedem Bon gross dasteht und bei neunzehn von zwanzig
+ * Artikeln folgenlos ist, wird aus Gewohnheit betaetigt. Bei einer steuerlich
+ * relevanten Angabe ist Gewohnheit das falsche Werkzeug.
+ *
+ * **Er verschwindet trotzdem nie.** Klein heisst klein, nicht weg: die
+ * Verzehrart ist aufzuzeichnen, ob sie den Satz bewegt oder nicht.
+ *
+ * **Und er springt nicht.** Die Zeile behaelt ihre Hoehe, gleich in welchem
+ * Zustand; es aendert sich nur das Gewicht, und das mit einem Uebergang. An
+ * der Theke soll die Kasse ihr Layout nicht umbauen, waehrend jemand tippt.
+ */
 function VerzehrartUmschalter({
   aktuell,
   onWaehle,
   gesperrt,
+  prominent,
 }: {
   aktuell: Verzehrart | undefined
   onWaehle: (v: Verzehrart) => void
   gesperrt: boolean
+  prominent: boolean
 }): JSX.Element {
   return (
-    <div className="verzehrart">
+    <div className={'verzehrart' + (prominent ? '' : ' klein')}>
       <button
         type="button"
         disabled={gesperrt}
@@ -471,6 +520,11 @@ function VerzehrartUmschalter({
       >
         Mitnehmen
       </button>
+      {/*
+        Ohne diesen Satz sieht der kleine Zustand aus, als sei der Schalter
+        kaputt oder abgeschaltet.
+      */}
+      {!prominent && <span className="folgenlos">{VERZEHRART_FOLGENLOS}</span>}
     </div>
   )
 }

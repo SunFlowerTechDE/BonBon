@@ -301,6 +301,26 @@ export function steuersatzBei(
 }
 
 /**
+ * Ändert die Verzehrart bei diesem Artikel überhaupt den Steuersatz?
+ *
+ * Seit dem 1. Januar 2026 fast nirgends mehr: Speisen sind in beiden Fällen
+ * ermäßigt, Getränke in beiden Fällen Regelsatz. Übrig bleibt das
+ * Milchmischgetränk ab 75 % Milchanteil — im Café zwei bis vier Artikel von
+ * zwanzig.
+ *
+ * Die Oberfläche richtet den großen Umschalter danach aus: prominent, wenn er
+ * etwas bewirkt, sonst klein. Ein Schalter, der bei jedem Bon groß dasteht und
+ * bei neunzehn von zwanzig Artikeln folgenlos ist, wird aus Gewohnheit
+ * betätigt — und Gewohnheit ist bei einer steuerlich relevanten Angabe das
+ * falsche Werkzeug.
+ */
+export function verzehrartAendertSatz(artikelId: string): boolean {
+  const gefunden = NACH_ID.get(artikelId)
+  if (gefunden === undefined) return false
+  return gefunden.steuer.imHaus.satz !== gefunden.steuer.ausserHaus.satz
+}
+
+/**
  * Der Hinweis, der in der Oberfläche stehen muss.
  *
  * Nicht als Höflichkeit, sondern weil die Vorbelegung sonst wie eine Auskunft
@@ -309,3 +329,11 @@ export function steuersatzBei(
  */
 export const STEUERHINWEIS =
   'Steuersätze sind Vorschläge und mit dem Steuerberater zu prüfen.'
+
+/**
+ * Warum der Umschalter gerade klein ist.
+ *
+ * Ohne diesen Satz sieht es aus, als sei er kaputt oder abgeschaltet.
+ */
+export const VERZEHRART_FOLGENLOS =
+  'Ändert bei diesen Artikeln den Steuersatz nicht — wird aber trotzdem aufgezeichnet.'

@@ -14,7 +14,7 @@ import { MockTse, previewLines } from '@bonbon/ports'
 import { SpeicherEventLog, VorschauDrucker, entwicklungsHasher } from '../src/adapter.js'
 import { Kasse, schnellbetraege } from '../src/kasse.js'
 import { VORGABE } from '../src/konfiguration.js'
-import { ARTIKEL, steuersatzregel } from '../src/stammdaten.js'
+import { ARTIKEL, steuersatzregel, verzehrartAendertSatz } from '../src/stammdaten.js'
 
 function baueKasse(): {
   kasse: Kasse
@@ -310,6 +310,37 @@ describe('Steuervorbelegung der Stammdaten', () => {
 
   it('wirft bei einem unbekannten Artikel, statt einen Satz zu raten', () => {
     expect(() => steuersatzregel('GIBTSNICHT', 'im-haus', t)).toThrow(/unbekannter Artikel/)
+  })
+})
+
+describe('Der Umschalter richtet sich nach seiner Wirkung', () => {
+  /**
+   * Bis zum 31.12.2025 bewegte die Verzehrart bei fast jedem Artikel den Satz.
+   * Seit dem 1.1.2026 nur noch beim Milchmischgetränk — und die Oberfläche
+   * macht den Schalter nur dann groß.
+   */
+  it('erkennt, bei welchen Artikeln die Verzehrart den Satz ändert', () => {
+    expect(verzehrartAendertSatz('LATTE')).toBe(true)
+
+    for (const id of ['KAFFEE', 'ESPRESSO', 'TEE', 'CAPPUCCINO', 'LATTE_HAFER']) {
+      expect(verzehrartAendertSatz(id), id).toBe(false)
+    }
+    for (const id of ['KAESEKUCHEN', 'CROISSANT', 'BROETCHEN', 'WASSER', 'APFELSCHORLE']) {
+      expect(verzehrartAendertSatz(id), id).toBe(false)
+    }
+  })
+
+  it('ist im Sortiment die Ausnahme, nicht die Regel', () => {
+    // Zwei bis vier von zwanzig — das ist die Begründung dafür, den Schalter
+    // nicht mehr bei jedem Bon groß zu zeigen. Fällt die Zahl auseinander,
+    // stimmt die Begründung nicht mehr.
+    const mitWirkung = ARTIKEL.filter((a) => verzehrartAendertSatz(a.id))
+    expect(mitWirkung.length).toBeGreaterThan(0)
+    expect(mitWirkung.length).toBeLessThan(ARTIKEL.length / 4)
+  })
+
+  it('kennt keinen unbekannten Artikel und behauptet auch keine Wirkung', () => {
+    expect(verzehrartAendertSatz('GIBTSNICHT')).toBe(false)
   })
 })
 
