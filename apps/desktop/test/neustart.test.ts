@@ -24,7 +24,13 @@ import {
   VorschauDrucker,
   entwicklungsHasher,
 } from '../src/adapter.js'
-import { Kasse, TSE_AUFGELOEST } from '../src/kasse.js'
+import {
+  Kasse,
+  TSE_AUFGELOEST,
+  TSE_SIGNATUR,
+  TSE_SIGNATUR_AUSGEFALLEN,
+  TSE_TRANSAKTION_BEGONNEN,
+} from '../src/kasse.js'
 import { VORGABE } from '../src/konfiguration.js'
 
 /**
@@ -142,25 +148,26 @@ describe('Der Bon lebt im Log, von Anfang an', () => {
     const { kasse } = await neueKasse(log, new MockTseSpeicherImRam())
 
     await kasse.beginneBon('im-haus')
-    expect(log.ereignisse.map((e) => e.type)).toEqual(['SaleStarted'])
+    // Der geoeffnete TSE-Vorgang steht sofort mit im Log: nur so weiss die
+    // Kasse nach einem Absturz, dass da etwas offen ist.
+    expect(log.ereignisse.map((e) => e.type)).toEqual(['SaleStarted', TSE_TRANSAKTION_BEGONNEN])
 
     await kasse.tippeArtikel('KAFFEE')
-    expect(log.ereignisse.map((e) => e.type)).toEqual(['SaleStarted', 'LineAdded'])
+    expect(log.ereignisse.map((e) => e.type).at(-1)).toBe('LineAdded')
 
     await kasse.setzeVerzehrart('ausser-haus')
-    expect(log.ereignisse.map((e) => e.type)).toEqual([
-      'SaleStarted',
-      'LineAdded',
-      'DiningModeChanged',
-    ])
+    expect(log.ereignisse.map((e) => e.type).at(-1)).toBe('DiningModeChanged')
 
     await kasse.schliesseAb('bar', cents(300))
     expect(log.ereignisse.map((e) => e.type)).toEqual([
       'SaleStarted',
+      TSE_TRANSAKTION_BEGONNEN,
       'LineAdded',
       'DiningModeChanged',
       'PaymentTaken',
       'SaleFinished',
+      // Die Signaturdaten stehen im Log, nicht nur auf dem Papier.
+      TSE_SIGNATUR,
     ])
   })
 
@@ -297,8 +304,218 @@ describe('Verwaiste TSE-Transaktion nach einem Absturz', () => {
     gestartet.tse.setFehler({ art: 'ausgefallen', grund: 'TSE-Stick nicht erkannt' })
     await expect(gestartet.kasse.richteEin()).resolves.toBeUndefined()
 
-    expect(protokoll.join(' ')).toContain('nicht abfragbar')
-    expect(protokoll.join(' ')).toContain('beim naechsten Start nachgeholt')
+    // Sie sagt, dass die TSE nicht antwortet — und versucht es trotzdem, weil
+    // der Log weiss, dass etwas offen ist. Der Versuch scheitert, und genau
+    // das wird gemeldet statt als erledigt verbucht.
+    expect(protokoll.join(' ')).toContain('beantwortet die Frage nach offenen Transaktionen nicht')
+    expect(protokoll.join(' ')).toContain('erneut versucht')
+    // Nichts wurde als aufgeloest festgehalten — sonst bliebe es fuer immer offen.
+    expect(log.ereignisse.filter((e) => e.type === TSE_AUFGELOEST)).toHaveLength(0)
+  })
+})
+
+describe('Signaturdaten im Log', () => {
+  /**
+   * Der Absturz zwischen Signatur und Log.
+   *
+   * Der gefährlichste der drei Zeitpunkte, weil ihn sonst niemand findet: die
+   * TSE-Transaktion ist beendet, steht also nirgends offen. Der Abgleich über
+   * offene Transaktionen läuft daran vorbei, und die Signaturdaten wären
+   * dauerhaft weg — ohne dass irgendetwas auf ihr Fehlen hinweist.
+   *
+   * Nachgestellt wird er, indem genau der Schreibvorgang für das
+   * Signaturereignis scheitert. Alles davor ist bereits geschrieben, die
+   * Signatur ist erteilt.
+   */
+  it('trägt sie beim nächsten Start nach, wenn das Schreiben scheiterte', async () => {
+    const log = new SpeicherEventLog(entwicklungsHasher(), () => undefined)
+    const tseSpeicher = new MockTseSpeicherImRam()
+
+    const erste = await neueKasse(log, tseSpeicher)
+    const echtesAnhaengen = log.anhaengen.bind(log)
+    vi.spyOn(log, 'anhaengen').mockImplementation(
+      async (geraet, type, payload, occurredAt, id, saleId) => {
+        if (type === TSE_SIGNATUR) throw new Error('Absturz zwischen Signatur und Log')
+        return echtesAnhaengen(geraet, type, payload, occurredAt, id, saleId)
+      },
+    )
+
+    await erste.kasse.beginneBon('im-haus')
+    await erste.kasse.tippeArtikel('KAFFEE')
+    const ergebnis = await erste.kasse.schliesseAb('bar', cents(300))
+
+    // Der Verkauf ist durch — der Beleg wird nicht wegen des Logfehlers
+    // zurückgehalten. Der Kunde hat bezahlt, die TSE hat signiert.
+    expect(ergebnis.signiert).toBe(true)
+    expect(ergebnis.gedruckt).toBe(true)
+    // Aber im Log fehlen die Signaturdaten.
+    expect(log.ereignisse.filter((e) => e.type === TSE_SIGNATUR)).toHaveLength(0)
+    // Und es steht auch keine Transaktion offen — deshalb findet der andere
+    // Abgleich hier nichts.
+    expect(await erste.tse.offeneTransaktionen()).toEqual([])
+
+    vi.restoreAllMocks()
+
+    // --- Neustart ---
+    const protokoll: string[] = []
+    const zweite = await neueKasse(log, tseSpeicher, protokoll)
+
+    const nachgetragen = log.ereignisse.filter((e) => e.type === TSE_SIGNATUR)
+    expect(nachgetragen).toHaveLength(1)
+    const daten = JSON.parse(nachgetragen[0]?.payload ?? '{}') as Record<string, unknown>
+    expect(daten).toMatchObject({
+      belegreferenz: ergebnis.beleg.belegnummer,
+      nachgetragen: true,
+      transaktionsnummer: ergebnis.beleg.signatur?.transaktionsnummer,
+      signaturzaehler: ergebnis.beleg.signatur?.signaturzaehler,
+      pruefwert: ergebnis.beleg.signatur?.pruefwert,
+      seriennummer: ergebnis.beleg.signatur?.seriennummer,
+    })
+    // Beide Zeitstempel und die Signatur selbst sind dabei.
+    expect(daten['startzeit']).toBeDefined()
+    expect(daten['logzeit']).toBeDefined()
+    expect(daten['signatur']).toBeDefined()
+    expect(protokoll.join(' ')).toContain('nachgetragen')
+
+    // Ein zweiter Start trägt nicht noch einmal nach.
+    await neueKasse(log, tseSpeicher)
+    expect(log.ereignisse.filter((e) => e.type === TSE_SIGNATUR)).toHaveLength(1)
+    void zweite
+  })
+
+  it('vermerkt die Lücke, wenn die TSE die Signatur nicht kennt', async () => {
+    const log = new SpeicherEventLog(entwicklungsHasher(), () => undefined)
+    const tseSpeicher = new MockTseSpeicherImRam()
+
+    const erste = await neueKasse(log, tseSpeicher)
+    const echtesAnhaengen = log.anhaengen.bind(log)
+    vi.spyOn(log, 'anhaengen').mockImplementation(
+      async (geraet, type, payload, occurredAt, id, saleId) => {
+        if (type === TSE_SIGNATUR) throw new Error('Absturz zwischen Signatur und Log')
+        return echtesAnhaengen(geraet, type, payload, occurredAt, id, saleId)
+      },
+    )
+    await erste.kasse.beginneBon('im-haus')
+    await erste.kasse.tippeArtikel('KAFFEE')
+    await erste.kasse.schliesseAb('bar', cents(300))
+    vi.restoreAllMocks()
+
+    // Die TSE kennt die Signatur nicht mehr — ausgetauschtes Geraet, oder eine
+    // Transaktion, die nie von dieser Middleware kam.
+    const bisher = await tseSpeicher.laden()
+    if (bisher === undefined) throw new Error('Kein TSE-Zustand gespeichert')
+    await tseSpeicher.sichern({ ...bisher, signaturen: {} })
+
+    const protokoll: string[] = []
+    await neueKasse(log, tseSpeicher, protokoll)
+
+    // Die Lücke wird vermerkt, nicht weggelassen: sonst sähe der Bon aus wie
+    // ein dokumentierter TSE-Ausfall.
+    const luecke = log.ereignisse.filter((e) => e.type === TSE_SIGNATUR_AUSGEFALLEN)
+    expect(luecke).toHaveLength(1)
+    expect(JSON.parse(luecke[0]?.payload ?? '{}')).toMatchObject({
+      grund: 'Beim Start nachgefragt: die TSE kennt zu diesem Beleg keine Signatur',
+    })
+    expect(protokoll.join(' ')).toContain('keine Signatur')
+  })
+
+  it('hält einen TSE-Ausfall als eigenes Ereignis fest', async () => {
+    // Regel 8 verlangt, den Ausfall mit Zeitpunkt und Ursache zu protokollieren.
+    // Erst dadurch ist er vom Datenverlust oben unterscheidbar.
+    const log = new SpeicherEventLog(entwicklungsHasher(), () => undefined)
+    const { kasse, tse } = await neueKasse(log, new MockTseSpeicherImRam())
+    tse.setFehler({ art: 'ausgefallen', grund: 'TSE-Stick nicht erkannt' })
+
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('KAFFEE')
+    await kasse.schliesseAb('bar', cents(300))
+
+    const ausfall = log.ereignisse.filter((e) => e.type === TSE_SIGNATUR_AUSGEFALLEN)
+    expect(ausfall).toHaveLength(1)
+    const daten = JSON.parse(ausfall[0]?.payload ?? '{}') as Record<string, unknown>
+    expect(daten['grund']).toBe('TSE-Stick nicht erkannt')
+    expect(daten['zeitpunkt']).toBeDefined()
+
+    // Und beim nächsten Start wird deswegen nichts nachgefragt — der Bon hat
+    // seinen Nachweis, auch wenn er negativ ausfällt.
+    tse.setFehler({ art: 'keiner' })
+    const protokoll: string[] = []
+    await neueKasse(log, new MockTseSpeicherImRam(), protokoll)
+    expect(protokoll.join(' ')).not.toContain('ohne Signaturnachweis')
+  })
+})
+
+describe('Abgleich über alle Bons, nicht nur den letzten', () => {
+  /**
+   * Der Fall, der eine falsche Aufzeichnung erzeugt hätte.
+   *
+   * Ein älterer Bon ist vollständig abgeschlossen, seine TSE-Transaktion steht
+   * aber noch offen (die Signatur scheiterte). Danach laufen weitere Verkäufe.
+   * Wer beim Abgleich nur den zuletzt begonnenen Bon ansieht, findet zu der
+   * offenen Transaktion nichts und bricht sie ab — ein tatsächlich
+   * stattgefundener Verkauf stünde in der TSE als abgebrochen.
+   */
+  it('schließt eine ältere Transaktion ab, statt sie abzubrechen', async () => {
+    const log = new SpeicherEventLog(entwicklungsHasher(), () => undefined)
+    const tseSpeicher = new MockTseSpeicherImRam()
+
+    const erste = await neueKasse(log, tseSpeicher)
+
+    // Bon 1: vollständig im Log, aber die Signatur scheitert.
+    await erste.kasse.beginneBon('im-haus')
+    await erste.kasse.tippeArtikel('KAFFEE')
+    erste.tse.setFehler({ art: 'ausgefallen', grund: 'TSE antwortet gerade nicht' })
+    await erste.kasse.schliesseAb('bar', cents(300))
+    erste.tse.setFehler({ art: 'keiner' })
+    const alterBon = 'BONBON-DEV-001-00001'
+    expect(await erste.tse.offeneTransaktionen()).toHaveLength(1)
+
+    // Danach zwei weitere Verkäufe, ganz normal.
+    await verkaufe(erste.kasse)
+    await verkaufe(erste.kasse)
+
+    // --- Neustart ---
+    const zweite = await neueKasse(log, tseSpeicher)
+
+    expect(await zweite.tse.offeneTransaktionen()).toEqual([])
+    // Der entscheidende Punkt: abgeschlossen, nicht abgebrochen.
+    expect(zweite.tse.abgebrocheneVorgaenge).toEqual([])
+    expect(zweite.tse.signierteVorgaenge.map((v) => v.belegreferenz)).toContain(alterBon)
+
+    const aufgeloest = log.ereignisse.filter((e) => e.type === TSE_AUFGELOEST)
+    expect(aufgeloest).toHaveLength(1)
+    expect(JSON.parse(aufgeloest[0]?.payload ?? '{}')).toMatchObject({
+      belegreferenz: alterBon,
+      ausgang: 'abgeschlossen',
+    })
+  })
+
+  it('löst mehrere unbeendete Bons auf, nicht nur den jüngsten', async () => {
+    const log = new SpeicherEventLog(entwicklungsHasher(), () => undefined)
+    const tseSpeicher = new MockTseSpeicherImRam()
+
+    // Zwei Abstürze hintereinander, ohne dass dazwischen aufgeräumt wurde:
+    // die TSE ist beim ersten Neustart nicht erreichbar.
+    const erste = await neueKasse(log, tseSpeicher)
+    await erste.kasse.beginneBon('im-haus')
+    await erste.kasse.tippeArtikel('KAFFEE')
+
+    const zweite = starteKasse(log, tseSpeicher)
+    await zweite.tse.ladeZustand()
+    zweite.tse.setFehler({ art: 'ausgefallen', grund: 'TSE-Stick nicht erkannt' })
+    await zweite.kasse.richteEin()
+    // Der Bon ist aufgelöst, die Transaktion noch nicht — die TSE schwieg.
+    expect(log.ereignisse.filter((e) => e.type === 'SaleCancelled')).toHaveLength(1)
+    zweite.tse.setFehler({ art: 'keiner' })
+    await zweite.kasse.beginneBon('im-haus')
+    await zweite.kasse.tippeArtikel('KAFFEE')
+
+    // --- Dritter Start, jetzt mit TSE ---
+    const dritte = await neueKasse(log, tseSpeicher)
+
+    expect(log.ereignisse.filter((e) => e.type === 'SaleCancelled')).toHaveLength(2)
+    expect(await dritte.tse.offeneTransaktionen()).toEqual([])
+    expect(dritte.tse.abgebrocheneVorgaenge.map((v) => v.transaktionsnummer).sort()).toEqual([1, 2])
   })
 })
 

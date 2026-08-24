@@ -131,6 +131,28 @@ Daraus folgt dreierlei:
    geschriebenen Ereignis und dem Absturz noch getippt wurde, weiß niemand.
 3. **Offene TSE-Transaktionen.**
 
+### Die Signaturdaten stehen im Log
+
+Direkt nach Rückkehr der Signatur schreibt die Kasse `TseSignaturErfasst` —
+Transaktionsnummer, Signaturzähler, beide Zeitstempel, Seriennummer, Signatur
+und Prüfwert. Bleibt die Signatur aus, schreibt sie stattdessen
+`TseSignaturAusgefallen` mit Grund und Zeitpunkt (Regel 8).
+
+Warum das mehr ist als eine Exportfrage: stürzt die Kasse **nach** der Signatur,
+aber **vor** dem Festhalten ab, findet der Transaktionsabgleich nichts — die
+TSE-Transaktion ist abgeschlossen, steht also nirgends offen. Die Signaturdaten
+wären dauerhaft aus dem Log verschwunden, und nichts wiese auf ihr Fehlen hin.
+
+Deshalb der zweite Abgleichfall beim Start: jeder Bon mit `SaleFinished`, aber
+ohne Signaturnachweis, wird bei der TSE nachgefragt. Was sie liefert, wird als
+`nachgetragen` gekennzeichnet; was sie nicht kennt, wird als Lücke vermerkt
+statt weggelassen. Antwortet sie gar nicht, wird **nichts** geschrieben und
+beim nächsten Start erneut versucht — „ich weiß es nicht" darf nicht zu „gibt
+es nicht" werden.
+
+Erst das Ausfall-Ereignis macht die beiden Fälle unterscheidbar: ein
+dokumentierter TSE-Ausfall sieht sonst genauso aus wie ein Datenverlust.
+
 ### Verwaiste TSE-Transaktionen
 
 Die TSE-Transaktion wird beim **Bonbeginn** geöffnet — die KassenSichV verlangt
@@ -148,9 +170,44 @@ Stillschweigend bereinigen wäre die stille Änderung aus Regel 1. Antwortet die
 TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8) — der
 Abgleich wird beim nächsten Start nachgeholt, und der Aufschub wird gemeldet.
 
-Bei fiskaltrust (M3): abgefragt über den Zero-Receipt
-`0x4445000000000002`, dessen Antwort `CurrentStartedTransactionNumbers` trägt;
-beendet über die Fail-Transaction `0x444500000000000B`.
+Nachgeschlagen wird über die **Belegreferenz**, nicht über „der zuletzt
+begonnene Bon". Der Unterschied ist nicht kosmetisch: ein tatsächlich
+stattgefundener Verkauf stünde sonst in der TSE als abgebrochen — eine falsche
+Aufzeichnung.
+
+Festgehalten wird nur der **Erfolg**. Ein gescheiterter Versuch bekommt kein
+Ereignis, sonst gälte die Transaktion beim nächsten Start als erledigt und
+bliebe für immer offen. (Gefunden, als zwei Abstürze hintereinander
+nachgestellt wurden.)
+
+#### Woher die Kasse weiß, was offen ist — gemessen, nicht nachgeschlagen
+
+Die Dokumentation legt nahe, die Antwort des Zero-Receipts
+(`0x4445000000000002`) trage einen TSE-Status mit
+`CurrentStartedTransactionNumbers`. **Am laufenden Launcher gemessen stimmt das
+nicht:**
+
+```
+pnpm --filter @bonbon/tse-spike exec tsx src/tse-info-probe.ts
+```
+
+- Der Zero-Receipt antwortet mit 16 Signaturen, von `start-transaction-result`
+  bis `<public-key>` — **keine** führt offene Transaktionen auf.
+- Der Journal-Endpunkt beantwortet jeden versuchten `ftJournalType` mit
+  derselben Versionsauskunft (243 Zeichen).
+- Die Antwort auf `start-transaction` enthält genau **eine** Signatur
+  (`start-transaction-signature`) und **keine Transaktionsnummer**.
+
+`CurrentStartedTransactionNumbers` ist ein **ausgehendes** Feld: es geht im
+`ftReceiptCaseData` eines impliziten Fail-Transaction-Belegs mit, um
+Transaktionen zu schließen, die die Middleware nicht kennt. Zum Abfragen ist es
+nicht da — die Middleware ordnet über `cbReceiptReference` zu.
+
+Daraus folgt der Entwurf: **der Log ist die Quelle.** Die Kasse schreibt
+`TseTransaktionBegonnen`, sobald sie eine Transaktion öffnet, und weiß daraus
+selbst, was offen steht. `offeneTransaktionen()` bleibt als zweite Quelle für
+Reste, die nicht von dieser Kasse stammen. Antwortet die TSE nicht, wird der
+Log trotzdem abgeglichen.
 
 ---
 

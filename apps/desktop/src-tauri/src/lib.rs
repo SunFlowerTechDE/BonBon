@@ -74,6 +74,18 @@ struct VerkettetesEreignis {
     payload: String,
     prev_hash: String,
     hash: String,
+    /**
+     * Zu welchem Bon das Ereignis gehoert.
+     *
+     * Der Wert kommt vom Aufrufer und wird hier **nicht** aus dem Payload
+     * gelesen: welches Feld den Bon benennt, weiss allein die TypeScript-Seite.
+     *
+     * Er geht bewusst **nicht** in die Hash-Eingabe ein. Die Kette bleibt damit
+     * unveraendert (dieselben Testvektoren gelten weiter), und die Spalte ist
+     * trotzdem nicht faelschbar: sie ist aus dem Payload ableitbar, und der ist
+     * gehasht.
+     */
+    sale_id: Option<String>,
 }
 
 fn oeffne(pfad: &str) -> Result<Connection, String> {
@@ -96,13 +108,40 @@ fn oeffne(pfad: &str) -> Result<Connection, String> {
                 payload     TEXT    NOT NULL,
                 prev_hash   TEXT    NOT NULL,
                 hash        TEXT    NOT NULL,
+                sale_id     TEXT,
                 synced_at   TEXT,
                 UNIQUE (device_id, seq)
              ) STRICT;
              CREATE INDEX IF NOT EXISTS idx_events_device_seq
-                ON sale_events (device_id, seq);",
+                ON sale_events (device_id, seq);
+             CREATE INDEX IF NOT EXISTS idx_events_device_sale
+                ON sale_events (device_id, sale_id);",
         )
         .map_err(|e| format!("Tabelle nicht anlegbar: {e}"))?;
+
+    // Aeltere Datenbanken kennen `sale_id` noch nicht. Die Spalte wird
+    // ergaenzt; vorhandene Zeilen behalten NULL.
+    //
+    // **Kein Nachtragen.** Man koennte die Spalte aus dem Payload fuellen, aber
+    // das waere ein UPDATE auf `sale_events` — und der Log ist append-only
+    // (Regel 2). Eine Ausnahme „nur fuer eine abgeleitete Spalte" waere der
+    // Anfang vom Ende dieser Regel. Ereignisse aus der Zeit davor tauchen in
+    // den Abfragen nach Bon deshalb nicht auf; das ist der Preis und er wird
+    // hier genannt, nicht verschwiegen.
+    let hat_spalte = verbindung
+        .prepare("SELECT 1 FROM pragma_table_info('sale_events') WHERE name = 'sale_id'")
+        .and_then(|mut a| a.exists([]))
+        .map_err(|e| format!("Spaltenpruefung fehlgeschlagen: {e}"))?;
+    if !hat_spalte {
+        verbindung
+            .execute_batch(
+                "ALTER TABLE sale_events ADD COLUMN sale_id TEXT;
+                 CREATE INDEX IF NOT EXISTS idx_events_device_sale
+                    ON sale_events (device_id, sale_id);",
+            )
+            .map_err(|e| format!("Spalte sale_id nicht ergaenzbar: {e}"))?;
+    }
+
     Ok(verbindung)
 }
 
@@ -141,6 +180,7 @@ fn lies_ereignis(z: &rusqlite::Row<'_>) -> rusqlite::Result<VerkettetesEreignis>
         payload: z.get(5)?,
         prev_hash: z.get(6)?,
         hash: z.get(7)?,
+        sale_id: z.get(8)?,
     })
 }
 
@@ -153,6 +193,7 @@ fn eventlog_anhaengen(
     payload: String,
     occurred_at: String,
     id: String,
+    sale_id: Option<String>,
 ) -> Result<VerkettetesEreignis, String> {
     let verbindung = oeffne(&pfad)?;
 
@@ -173,6 +214,7 @@ fn eventlog_anhaengen(
         payload,
         prev_hash: letzter_hash.clone(),
         hash: String::new(),
+        sale_id,
     };
 
     let mut hasher = Sha256::new();
@@ -182,8 +224,8 @@ fn eventlog_anhaengen(
     verbindung
         .execute(
             "INSERT INTO sale_events
-               (id, device_id, seq, occurred_at, type, payload, prev_hash, hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+               (id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 ereignis.id,
                 ereignis.device_id,
@@ -193,6 +235,7 @@ fn eventlog_anhaengen(
                 ereignis.payload,
                 ereignis.prev_hash,
                 ereignis.hash,
+                ereignis.sale_id,
             ],
         )
         .map_err(|e| format!("Ereignis nicht schreibbar: {e}"))?;
@@ -218,7 +261,7 @@ fn eventlog_letztes_ereignis(
 ) -> Result<Option<VerkettetesEreignis>, String> {
     let verbindung = oeffne(&pfad)?;
     let ergebnis = verbindung.query_row(
-        "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash
+        "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
            FROM sale_events
           WHERE device_id = ?1 AND type = ?2
           ORDER BY seq DESC LIMIT 1",
@@ -232,31 +275,91 @@ fn eventlog_letztes_ereignis(
     }
 }
 
-/// Alle Ereignisse eines Geraets ab einer Sequenznummer, aufsteigend.
-///
-/// Damit holt sich die Kasse beim Start den zuletzt begonnenen Bon zurueck und
-/// sieht, ob er je abgeschlossen wurde.
+/// Alle Ereignisse eines Bons, aufsteigend.
 #[tauri::command]
-fn eventlog_ereignisse_ab(
+fn eventlog_ereignisse_zu_beleg(
     pfad: String,
     device_id: String,
-    ab_seq: i64,
+    sale_id: String,
 ) -> Result<Vec<VerkettetesEreignis>, String> {
     let verbindung = oeffne(&pfad)?;
     let mut abfrage = verbindung
         .prepare(
-            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash
+            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
                FROM sale_events
-              WHERE device_id = ?1 AND seq >= ?2
+              WHERE device_id = ?1 AND sale_id = ?2
               ORDER BY seq",
         )
         .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
+    // Erst binden, dann zurueckgeben: sonst lebt die Abfrage laenger als die
+    // Verbindung, die sie ausleiht.
     let zeilen = abfrage
-        .query_map(rusqlite::params![device_id, ab_seq], lies_ereignis)
+        .query_map(rusqlite::params![device_id, sale_id], lies_ereignis)
         .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
     Ok(zeilen)
+}
+
+/// Belege, die bestimmte Ereignistypen haben — und andere nicht.
+///
+/// Reine Mengenrechnung. **Welche** Typen einen Bon beenden oder eine Signatur
+/// belegen, weiss allein die TypeScript-Seite und gibt es hier hinein; Rust
+/// kennt die Bedeutung der Namen nicht (CLAUDE.md, Stack).
+///
+/// Damit findet die Kasse beim Start in einer Abfrage:
+/// - unbeendete Bons: hat `SaleStarted`, hat nicht `SaleFinished`/`SaleCancelled`
+/// - Bons ohne Signaturnachweis: hat `SaleFinished`, hat kein Signaturereignis
+///
+/// Zurueck kommen die Belege in der Reihenfolge ihres ersten Ereignisses —
+/// aelteste zuerst, damit sie in der Reihenfolge aufgeloest werden koennen, in
+/// der sie entstanden sind.
+#[tauri::command]
+fn eventlog_belege(
+    pfad: String,
+    device_id: String,
+    enthaelt: Vec<String>,
+    enthaelt_nicht: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let verbindung = oeffne(&pfad)?;
+
+    // Platzhalter fuer beide Listen. Eine leere Liste ergibt eine Summe von 0
+    // und damit die jeweils neutrale Bedingung.
+    let platzhalter = |anzahl: usize, ab: usize| -> String {
+        (0..anzahl)
+            .map(|i| format!("?{}", ab + i))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let hat = platzhalter(enthaelt.len(), 2);
+    let hat_nicht = platzhalter(enthaelt_nicht.len(), 2 + enthaelt.len());
+
+    let sql = format!(
+        "SELECT sale_id FROM sale_events
+          WHERE device_id = ?1 AND sale_id IS NOT NULL
+          GROUP BY sale_id
+         HAVING SUM(CASE WHEN type IN ({}) THEN 1 ELSE 0 END) {}
+            AND SUM(CASE WHEN type IN ({}) THEN 1 ELSE 0 END) = 0
+          ORDER BY MIN(seq)",
+        if hat.is_empty() { "NULL".to_string() } else { hat },
+        if enthaelt.is_empty() { ">= 0" } else { "> 0" },
+        if hat_nicht.is_empty() { "NULL".to_string() } else { hat_nicht },
+    );
+
+    let werte: Vec<&dyn rusqlite::ToSql> = std::iter::once(&device_id as &dyn rusqlite::ToSql)
+        .chain(enthaelt.iter().map(|t| t as &dyn rusqlite::ToSql))
+        .chain(enthaelt_nicht.iter().map(|t| t as &dyn rusqlite::ToSql))
+        .collect();
+
+    let mut abfrage = verbindung
+        .prepare(&sql)
+        .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
+    let belege = abfrage
+        .query_map(werte.as_slice(), |z| z.get::<_, String>(0))
+        .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
+    Ok(belege)
 }
 
 #[tauri::command]
@@ -326,7 +429,8 @@ macro_rules! befehle {
             eventlog_anhaengen,
             eventlog_anzahl,
             eventlog_letztes_ereignis,
-            eventlog_ereignisse_ab,
+            eventlog_ereignisse_zu_beleg,
+            eventlog_belege,
             datei_lesen,
             datei_schreiben,
             anwendungsverzeichnis
@@ -406,6 +510,9 @@ mod tests {
                 payload: vektor.ereignis.payload.clone(),
                 prev_hash: vektor.prev_hash.clone(),
                 hash: String::new(),
+                // Geht nicht in die Hash-Eingabe ein — die Testvektoren
+                // gelten unveraendert weiter.
+                sale_id: None,
             };
             assert_eq!(
                 hash_eingabe(&vektor.prev_hash, &e),

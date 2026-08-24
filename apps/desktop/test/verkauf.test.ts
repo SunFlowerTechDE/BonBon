@@ -52,7 +52,20 @@ describe('Ein Verkauf laeuft durch', () => {
     expect(ergebnis.gedruckt).toBe(true)
     expect(ergebnis.beleg.gesamtbetrag).toBe(1150)
     expect(ergebnis.beleg.rueckgeld).toBe(850)
-    expect(await log.anzahl()).toBe(ergebnis.ereignisse)
+    // Bonereignisse plus das Signaturereignis. Die beiden Zahlen sind
+    // absichtlich nicht dieselbe: `ergebnis.ereignisse` zaehlt den Bon, der Log
+    // haelt zusaetzlich fest, womit signiert wurde.
+    // Bonereignisse plus Transaktionsbeginn plus Signatur.
+    expect(await log.anzahl()).toBe(ergebnis.ereignisse + 2)
+    const signatur = log.ereignisse.at(-1)
+    expect(signatur?.type).toBe('TseSignaturErfasst')
+    expect(JSON.parse(signatur?.payload ?? '{}')).toMatchObject({
+      belegreferenz: ergebnis.beleg.belegnummer,
+      nachgetragen: false,
+      transaktionsnummer: ergebnis.beleg.signatur?.transaktionsnummer,
+      signaturzaehler: ergebnis.beleg.signatur?.signaturzaehler,
+      pruefwert: ergebnis.beleg.signatur?.pruefwert,
+    })
     expect(drucker.ladeGeoeffnet).toBe(1)
 
     const bonText = drucker.letzterBon.join('\n')

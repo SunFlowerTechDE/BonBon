@@ -93,6 +93,44 @@ const BON_EREIGNISTYPEN = new Set<string>([
  */
 export const TSE_AUFGELOEST = 'TseTransaktionAufgeloest'
 
+/**
+ * Die Signaturdaten eines Vorgangs — als eigenes Ereignis im Log.
+ *
+ * Ohne dieses Ereignis waeren sie nur auf dem Papier und in der TSE. Stuerzt
+ * die Kasse zwischen der Rueckkehr der Signatur und dem Festhalten ab, findet
+ * der Abgleich ueber offene Transaktionen **nichts**: die Transaktion ist ja
+ * abgeschlossen. Die Daten waeren dauerhaft aus dem Log verschwunden — und
+ * niemand haette sie vermisst, weil nichts auf ihr Fehlen hinweist.
+ */
+export const TSE_SIGNATUR = 'TseSignaturErfasst'
+
+/**
+ * Die Kasse hat eine TSE-Transaktion geoeffnet.
+ *
+ * Am laufenden fiskaltrust-Launcher gemessen: die Antwort auf
+ * `start-transaction` enthaelt keine Transaktionsnummer, und die TSE laesst
+ * sich ueber die POS-Schnittstelle nicht fragen, was offen steht. Also merkt
+ * die Kasse es sich selbst — sonst wuesste nach einem Absturz niemand, dass da
+ * etwas offen ist.
+ */
+export const TSE_TRANSAKTION_BEGONNEN = 'TseTransaktionBegonnen'
+
+/**
+ * Der Gegenpart: es wurde signiert werden **sollen**, aber es ging nicht.
+ *
+ * Erst dieses Ereignis macht die Luecke unterscheidbar. Ein abgeschlossener Bon
+ * ohne Signaturereignis ist sonst zweideutig — entweder ein dokumentierter
+ * TSE-Ausfall (Regel 8, Nachsignierung faellig) oder ein Absturz zur
+ * Unzeit. Das eine ist ein Zustand, das andere ein Datenverlust.
+ */
+export const TSE_SIGNATUR_AUSGEFALLEN = 'TseSignaturAusgefallen'
+
+/** Ereignistypen, die einen Signaturnachweis darstellen — erfolgreich oder nicht. */
+const SIGNATURNACHWEIS = [TSE_SIGNATUR, TSE_SIGNATUR_AUSGEFALLEN]
+
+/** Ereignistypen, die einen Bon beenden. */
+const BON_ABSCHLUSS = ['SaleFinished', 'SaleCancelled']
+
 export class Kasse {
   private ereignisse: SaleEventData[] = []
   private bonNummer = 0
@@ -180,6 +218,7 @@ export class Kasse {
         JSON.stringify(ereignis),
         ereignis.occurredAt,
         ereignis.saleId + '-' + String(laufend).padStart(3, '0'),
+        ereignis.saleId,
       )
       laufend += 1
     }
@@ -187,14 +226,55 @@ export class Kasse {
     return bonAusEreignissen(this.ereignisse)
   }
 
-  /** Ein technisches Ereignis in den Log, ohne den Bon zu beruehren. */
-  private async schreibeTechnisch(type: string, nutzlast: object, id: string): Promise<void> {
+  /**
+   * Ein technisches Ereignis in den Log, ohne den Bon zu beruehren.
+   *
+   * Es traegt trotzdem die Belegnummer: nur so findet der Abgleich beim Start
+   * heraus, ob zu einem abgeschlossenen Bon ein Signaturnachweis vorliegt.
+   */
+  private async schreibeTechnisch(
+    type: string,
+    nutzlast: object,
+    id: string,
+    saleId: string | undefined,
+  ): Promise<void> {
     await this.eventLog.anhaengen(
       this.konfiguration.kasse.deviceId,
       type,
       JSON.stringify(nutzlast),
       isoTimestamp(jetztMitOffset()),
       id,
+      saleId,
+    )
+  }
+
+  /**
+   * Haelt die Signaturdaten fest — sofort nach Rueckkehr der Signatur.
+   *
+   * Scheitert das Schreiben, wird der Verkauf **nicht** abgebrochen. Der
+   * Vorgang ist signiert und der Kunde hat bezahlt; den Beleg deswegen nicht
+   * auszugeben waere der groessere Schaden. Die Luecke wird gemeldet und beim
+   * naechsten Start nachgetragen.
+   */
+  private async haltefestSignatur(
+    saleId: string,
+    signatur: TseSignatur,
+    nachgetragen = false,
+  ): Promise<void> {
+    await this.schreibeTechnisch(
+      TSE_SIGNATUR,
+      { belegreferenz: saleId, nachgetragen, ...signatur },
+      saleId + '-signatur' + (nachgetragen ? '-nachgetragen' : ''),
+      saleId,
+    )
+  }
+
+  private async haltefestAusfall(saleId: string, grund: string): Promise<void> {
+    await this.schreibeTechnisch(
+      TSE_SIGNATUR_AUSGEFALLEN,
+      { belegreferenz: saleId, grund, zeitpunkt: isoTimestamp(jetztMitOffset()) },
+      saleId + '-signatur-ausgefallen',
+      saleId,
     )
   }
 
@@ -214,8 +294,9 @@ export class Kasse {
    */
   async richteEin(): Promise<void> {
     await this.uebernimmBelegnummer()
-    await this.loeseUnbeendetenBonAuf()
+    await this.loeseUnbeendeteBonsAuf()
     await this.gleicheOffeneTransaktionenAb()
+    await this.trageFehlendeSignaturenNach()
   }
 
   /**
@@ -255,108 +336,167 @@ export class Kasse {
     )
   }
 
-  /** Die Ereignisse des zuletzt begonnenen Bons, aus dem Log. */
-  private async letzterBonAusLog(): Promise<SaleEventData[] | undefined> {
-    const geraet = this.konfiguration.kasse.deviceId
-    const start = await this.eventLog.letztesEreignis(geraet, 'SaleStarted')
-    if (start === undefined) return undefined
-    const roh = await this.eventLog.ereignisseAb(geraet, start.seq)
-    return roh
+  /** Die Bonereignisse eines Belegs, ohne die technischen. */
+  private async bonAusLog(saleId: string): Promise<Bon | undefined> {
+    const roh = await this.eventLog.ereignisseZuBeleg(this.konfiguration.kasse.deviceId, saleId)
+    const bonereignisse = roh
       .filter((e) => BON_EREIGNISTYPEN.has(e.type))
       .map((e) => JSON.parse(e.payload) as SaleEventData)
+    return bonereignisse.length === 0 ? undefined : bonAusEreignissen(bonereignisse)
   }
 
   /**
-   * Ein Bon, der begonnen und nie beendet wurde, wird als abgebrochen
+   * Jeder Bon, der begonnen und nie beendet wurde, wird als abgebrochen
    * festgehalten.
    *
-   * Der Normalfall nach einem Absturz. Er wird **nicht** fortgesetzt: was
-   * zwischen dem letzten geschriebenen Ereignis und dem Absturz noch getippt
-   * wurde, weiss niemand, und ein halb wiederhergestellter Bon waere
-   * schlechter als ein sauber abgebrochener.
+   * **Alle**, nicht nur der letzte. Sonst bliebe ein aelterer Rest — etwa aus
+   * einem Lauf, in dem der Abgleich selbst gescheitert ist — auf Dauer offen.
+   *
+   * Fortgesetzt wird keiner: was zwischen dem letzten geschriebenen Ereignis
+   * und dem Absturz noch getippt wurde, weiss niemand, und ein halb
+   * wiederhergestellter Bon waere schlechter als ein sauber abgebrochener.
    */
-  private async loeseUnbeendetenBonAuf(): Promise<void> {
-    const ereignisse = await this.letzterBonAusLog()
-    if (ereignisse === undefined) return
-    const bon = bonAusEreignissen(ereignisse)
-    if (bon.zustand !== 'offen') return
-
-    const grund = 'Beim Start vorgefunden: begonnen und nie beendet'
-    this.onLog('Unbeendeter Bon ' + bon.saleId + ' gefunden — wird als abgebrochen festgehalten.')
-    const abbruch = brichBonAb(bon, this.kontext(), grund)
-    await this.eventLog.anhaengen(
+  private async loeseUnbeendeteBonsAuf(): Promise<void> {
+    const offene = await this.eventLog.belege(
       this.konfiguration.kasse.deviceId,
-      abbruch.type,
-      JSON.stringify(abbruch),
-      abbruch.occurredAt,
-      bon.saleId + '-abbruch',
+      ['SaleStarted'],
+      BON_ABSCHLUSS,
     )
+    for (const saleId of offene) {
+      const bon = await this.bonAusLog(saleId)
+      if (bon === undefined || bon.zustand !== 'offen') continue
+
+      const grund = 'Beim Start vorgefunden: begonnen und nie beendet'
+      this.onLog('Unbeendeter Bon ' + saleId + ' gefunden — wird als abgebrochen festgehalten.')
+      const abbruch = brichBonAb(bon, this.kontext(), grund)
+      await this.eventLog.anhaengen(
+        this.konfiguration.kasse.deviceId,
+        abbruch.type,
+        JSON.stringify(abbruch),
+        abbruch.occurredAt,
+        saleId + '-abbruch',
+        saleId,
+      )
+    }
   }
 
   /**
-   * Offene TSE-Transaktionen gegen den Log abgleichen.
+   * Offene TSE-Transaktionen auflösen.
    *
-   * Beim Bonbeginn wird die Transaktion geoeffnet. Stuerzt die Kasse danach
-   * ab, steht sie auf der TSE offen, ohne lokales Gegenstueck — und bleibt es,
-   * bis jemand sie aufloest. Eine echte TSE hat dafuer eine Obergrenze;
-   * irgendwann nimmt sie keine neue mehr an.
+   * **Der Log ist die Quelle, nicht die TSE.** Am laufenden fiskaltrust-Launcher
+   * gemessen: die Antwort auf `start-transaction` enthält genau eine Signatur
+   * und keine Transaktionsnummer, und die Antwort des Zero-Receipts führt keine
+   * offenen Transaktionen auf. Die Middleware ordnet über `cbReceiptReference`
+   * zu. Eine Kasse, die sich auf `offeneTransaktionen()` verlässt, hätte an
+   * diesem Gerät gar keine Antwort bekommen.
    *
-   * Zwei Ausgaenge, je nachdem, was der Log sagt:
+   * Also hält die Kasse selbst fest, wann sie eine Transaktion geöffnet hat
+   * (`TseTransaktionBegonnen`), und weiß daraus, was offen steht: jeder Beleg
+   * mit Transaktionsbeginn, aber ohne Signatur und ohne Auflösung.
    *
-   * - Der Bon ist im Log **vollstaendig** (`SaleFinished` steht drin): der
-   *   Absturz lag zwischen dem Schreiben und der Signatur. Die Transaktion
-   *   wird abgeschlossen — der Vorgang hat stattgefunden.
+   * `offeneTransaktionen()` bleibt als **zweite** Quelle — für Reste, die nicht
+   * von dieser Kasse stammen, und für Geräte, die die Frage beantworten können.
+   * Antwortet sie nicht, ist das kein Beinbruch mehr; der Log weiß es ohnehin.
+   *
+   * Zwei Ausgänge, je nachdem, was der Log **zu genau diesem Beleg** sagt:
+   *
+   * - Bon **vollständig** (`SaleFinished` steht drin): der Absturz lag zwischen
+   *   dem Schreiben und der Signatur. Die Transaktion wird abgeschlossen — der
+   *   Vorgang hat stattgefunden.
    * - Sonst: die Transaktion wird als abgebrochen beendet.
    *
-   * Beides geht in den Log. Stillschweigend bereinigen waere Regel 1.
+   * Nachgeschlagen wird über die Belegreferenz, nicht über „der zuletzt
+   * begonnene Bon". Der Unterschied ist nicht kosmetisch: ein tatsächlich
+   * stattgefundener Verkauf stünde sonst in der TSE als abgebrochen — eine
+   * falsche Aufzeichnung.
    */
   private async gleicheOffeneTransaktionenAb(): Promise<void> {
-    let offene: readonly { transaktionsnummer: string; belegreferenz?: string }[]
-    try {
-      offene = await this.tse.offeneTransaktionen()
-    } catch (fehler) {
-      // Die TSE antwortet nicht. Kein Grund, die Kasse zu sperren (Regel 8) —
-      // aber es wird gesagt, nicht verschwiegen.
-      this.onLog(
-        'Offene TSE-Transaktionen nicht abfragbar: ' +
-          (fehler instanceof Error ? fehler.message : String(fehler)) +
-          ' — der Abgleich wird beim naechsten Start nachgeholt.',
-      )
-      return
-    }
-    if (offene.length === 0) return
+    const geraet = this.konfiguration.kasse.deviceId
 
-    this.onLog(
-      (offene.length === 1
-        ? 'Eine TSE-Transaktion steht offen'
-        : String(offene.length) + ' TSE-Transaktionen stehen offen') + ' und wird aufgeloest.',
+    // Was der Log weiss.
+    const ausDemLog = await this.eventLog.belege(
+      geraet,
+      [TSE_TRANSAKTION_BEGONNEN],
+      [TSE_SIGNATUR, TSE_AUFGELOEST],
     )
 
-    const ereignisse = await this.letzterBonAusLog()
-    const letzterBon = ereignisse === undefined ? undefined : bonAusEreignissen(ereignisse)
-    const vollstaendig = letzterBon?.zustand === 'abgeschlossen' ? letzterBon : undefined
+    // Was die TSE zusaetzlich weiss — falls sie die Frage beantworten kann.
+    let ausDerTse: readonly { transaktionsnummer: string; belegreferenz?: string }[] = []
+    try {
+      ausDerTse = await this.tse.offeneTransaktionen()
+    } catch (fehler) {
+      this.onLog(
+        'Die TSE beantwortet die Frage nach offenen Transaktionen nicht (' +
+          (fehler instanceof Error ? fehler.message : String(fehler)) +
+          ') — der Log wird trotzdem abgeglichen.',
+      )
+    }
 
-    for (const transaktion of offene) {
-      const gehoertZumVollstaendigen =
-        vollstaendig !== undefined && transaktion.belegreferenz === vollstaendig.saleId
+    // Zusammenfuehren: erst die eigenen Belege, dann Fremdes ohne Zuordnung.
+    const aufgaben: { belegreferenz?: string; transaktionsnummer?: string }[] = []
+    for (const saleId of ausDemLog) {
+      aufgaben.push({
+        belegreferenz: saleId,
+        ...(await this.transaktionsnummerZu(saleId)),
+      })
+    }
+    for (const fremd of ausDerTse) {
+      if (fremd.belegreferenz !== undefined && ausDemLog.includes(fremd.belegreferenz)) continue
+      aufgaben.push({
+        ...(fremd.belegreferenz === undefined ? {} : { belegreferenz: fremd.belegreferenz }),
+        transaktionsnummer: fremd.transaktionsnummer,
+      })
+    }
+    if (aufgaben.length === 0) return
 
-      const ausgang = gehoertZumVollstaendigen
-        ? await this.beendeVerwaisteTransaktion(transaktion, vollstaendig)
-        : await this.brichVerwaisteTransaktionAb(transaktion)
+    this.onLog(
+      (aufgaben.length === 1
+        ? 'Eine TSE-Transaktion steht offen'
+        : String(aufgaben.length) + ' TSE-Transaktionen stehen offen') + ' und wird aufgeloest.',
+    )
+
+    for (const aufgabe of aufgaben) {
+      const bon =
+        aufgabe.belegreferenz === undefined
+          ? undefined
+          : await this.bonAusLog(aufgabe.belegreferenz)
+      const vollstaendig = bon?.zustand === 'abgeschlossen' ? bon : undefined
+
+      const ausgang =
+        vollstaendig === undefined
+          ? await this.brichVerwaisteTransaktionAb(aufgabe)
+          : await this.beendeVerwaisteTransaktion(aufgabe, vollstaendig)
+
+      // **Nur bei Erfolg festhalten.** Das Ereignis bedeutet „aufgeloest", nicht
+      // „versucht". Wuerde ein gescheiterter Versuch mitgeschrieben, gaelte die
+      // Transaktion beim naechsten Start als erledigt — und bliebe fuer immer
+      // offen. Gefunden, als zwei Abstuerze hintereinander nachgestellt wurden.
+      if (ausgang.ausgang === 'gescheitert') {
+        this.onLog(
+          'TSE-Transaktion ' +
+            (aufgabe.transaktionsnummer ?? aufgabe.belegreferenz ?? '(ohne Angabe)') +
+            ' nicht aufgeloest: ' +
+            ausgang.meldung +
+            ' — wird beim naechsten Start erneut versucht.',
+        )
+        continue
+      }
 
       await this.schreibeTechnisch(
         TSE_AUFGELOEST,
         {
-          transaktionsnummer: transaktion.transaktionsnummer,
-          belegreferenz: transaktion.belegreferenz ?? null,
+          transaktionsnummer: aufgabe.transaktionsnummer ?? null,
+          belegreferenz: aufgabe.belegreferenz ?? null,
           ausgang: ausgang.ausgang,
           meldung: ausgang.meldung,
         },
-        'tse-' + transaktion.transaktionsnummer + '-' + isoTimestamp(jetztMitOffset()),
+        (aufgabe.belegreferenz ?? 'tse-' + (aufgabe.transaktionsnummer ?? 'unbekannt')) +
+          '-tse-aufgeloest',
+        aufgabe.belegreferenz,
       )
       this.onLog(
         'TSE-Transaktion ' +
-          transaktion.transaktionsnummer +
+          (aufgabe.transaktionsnummer ?? aufgabe.belegreferenz ?? '(ohne Angabe)') +
           ': ' +
           ausgang.ausgang +
           ' (' +
@@ -366,31 +506,110 @@ export class Kasse {
     }
   }
 
+  /** Die Transaktionsnummer aus dem Beginn-Ereignis, falls die TSE eine nannte. */
+  private async transaktionsnummerZu(
+    saleId: string,
+  ): Promise<{ transaktionsnummer?: string }> {
+    const roh = await this.eventLog.ereignisseZuBeleg(this.konfiguration.kasse.deviceId, saleId)
+    const beginn = roh.find((e) => e.type === TSE_TRANSAKTION_BEGONNEN)
+    if (beginn === undefined) return {}
+    const nummer = (JSON.parse(beginn.payload) as { transaktionsnummer?: string })
+      .transaktionsnummer
+    return nummer === undefined ? {} : { transaktionsnummer: nummer }
+  }
+
+  /**
+   * Abgeschlossene Bons ohne Signaturnachweis nachtragen.
+   *
+   * Der Fall, den der Transaktionsabgleich **nicht** sieht: die Kasse ist
+   * zwischen der Rückkehr der Signatur und dem Festhalten abgestürzt. Die
+   * Transaktion auf der TSE ist beendet, steht also nirgends offen — ohne
+   * diesen Schritt wären die Signaturdaten dauerhaft weg, und nichts wiese auf
+   * ihr Fehlen hin.
+   *
+   * Gefragt wird die TSE. Was sie liefert, wird als nachgetragen gekennzeichnet;
+   * was sie nicht kennt, wird als Lücke vermerkt statt weggelassen. Antwortet
+   * sie gar nicht, wird nichts geschrieben und beim nächsten Start erneut
+   * versucht — „ich weiß es nicht" darf nicht zu „gibt es nicht" werden.
+   */
+  private async trageFehlendeSignaturenNach(): Promise<void> {
+    const ohneNachweis = await this.eventLog.belege(
+      this.konfiguration.kasse.deviceId,
+      ['SaleFinished'],
+      SIGNATURNACHWEIS,
+    )
+    if (ohneNachweis.length === 0) return
+
+    this.onLog(
+      String(ohneNachweis.length) +
+        ' abgeschlossene(r) Bon(s) ohne Signaturnachweis — es wird bei der TSE nachgefragt.',
+    )
+
+    for (const saleId of ohneNachweis) {
+      let signatur: TseSignatur | undefined
+      try {
+        signatur = await this.tse.signaturZu(saleId)
+      } catch (fehler) {
+        this.onLog(
+          'Signatur zu ' +
+            saleId +
+            ' nicht erfragbar: ' +
+            (fehler instanceof Error ? fehler.message : String(fehler)) +
+            ' — wird beim naechsten Start nachgeholt.',
+        )
+        return
+      }
+
+      if (signatur === undefined) {
+        await this.haltefestAusfall(
+          saleId,
+          'Beim Start nachgefragt: die TSE kennt zu diesem Beleg keine Signatur',
+        )
+        this.onLog('Zu ' + saleId + ' gibt es keine Signatur — die Luecke ist vermerkt.')
+      } else {
+        await this.haltefestSignatur(saleId, signatur, true)
+        this.onLog(
+          'Signatur zu ' +
+            saleId +
+            ' nachgetragen (Transaktion ' +
+            signatur.transaktionsnummer +
+            ').',
+        )
+      }
+    }
+  }
+
   private async beendeVerwaisteTransaktion(
-    transaktion: { transaktionsnummer: string },
+    aufgabe: { transaktionsnummer?: string },
     bon: Bon,
   ): Promise<{ ausgang: string; meldung: string }> {
     const ergebnis = await this.tse.signiere({
       belegreferenz: bon.saleId,
       kassenSeriennummer: this.konfiguration.kasse.seriennummer,
-      transaktionsnummer: transaktion.transaktionsnummer,
+      ...(aufgabe.transaktionsnummer === undefined
+        ? {}
+        : { transaktionsnummer: aufgabe.transaktionsnummer }),
       umsaetze: umsaetzeAus(bonSteuerausweis(bon)),
       zahlungen: [{ art: 'Bar', betrag: gesamtbetrag(bon) }],
     })
-    return ergebnis.art === 'signiert'
-      ? { ausgang: 'abgeschlossen', meldung: 'Der Bon war im Log vollstaendig' }
-      : { ausgang: 'gescheitert', meldung: ergebnis.grund }
+    if (ergebnis.art !== 'signiert') {
+      return { ausgang: 'gescheitert', meldung: ergebnis.grund }
+    }
+    // Sofort festhalten — sonst wäre derselbe Verlust möglich, den dieser
+    // Abgleich gerade repariert.
+    await this.haltefestSignatur(bon.saleId, ergebnis.signatur, true)
+    return { ausgang: 'abgeschlossen', meldung: 'Der Bon war im Log vollstaendig' }
   }
 
-  private async brichVerwaisteTransaktionAb(transaktion: {
-    transaktionsnummer: string
+  private async brichVerwaisteTransaktionAb(aufgabe: {
+    transaktionsnummer?: string
     belegreferenz?: string
   }): Promise<{ ausgang: string; meldung: string }> {
     const ergebnis = await this.tse.brichTransaktionAb({
-      transaktionsnummer: transaktion.transaktionsnummer,
-      ...(transaktion.belegreferenz === undefined
+      ...(aufgabe.transaktionsnummer === undefined
         ? {}
-        : { belegreferenz: transaktion.belegreferenz }),
+        : { transaktionsnummer: aufgabe.transaktionsnummer }),
+      ...(aufgabe.belegreferenz === undefined ? {} : { belegreferenz: aufgabe.belegreferenz }),
       grund: 'Beim Start vorgefunden: kein abgeschlossener Bon im Log',
     })
     return ergebnis.art === 'abgebrochen'
@@ -433,6 +652,18 @@ export class Kasse {
     })
     if (begonnen.art === 'begonnen') {
       this.tseTransaktion = begonnen.transaktion.transaktionsnummer
+      // Sofort festhalten: ab hier steht auf der TSE etwas offen, und nur der
+      // Log weiss davon.
+      await this.schreibeTechnisch(
+        TSE_TRANSAKTION_BEGONNEN,
+        {
+          belegreferenz: saleId,
+          transaktionsnummer: begonnen.transaktion.transaktionsnummer,
+          startzeit: begonnen.transaktion.startzeit ?? null,
+        },
+        saleId + '-transaktionsbeginn',
+        saleId,
+      )
     } else {
       this.tseBeginnAusfall = begonnen.grund
       this.onLog('TSE-Transaktion nicht geoeffnet: ' + begonnen.grund + ' — der Bon laeuft weiter.')
@@ -461,6 +692,23 @@ export class Kasse {
         belegreferenz: bon.saleId,
         grund,
       })
+      // Der geordnete Abbruch gehoert in den Log — sonst sucht der Abgleich
+      // beim naechsten Start eine Transaktion, die es nicht mehr gibt. Aber
+      // nur, wenn er auch gelungen ist: sonst bliebe sie offen und niemand
+      // versuchte es noch einmal.
+      if (ergebnis.art === 'abgebrochen') {
+        await this.schreibeTechnisch(
+          TSE_AUFGELOEST,
+          {
+            transaktionsnummer: this.tseTransaktion,
+            belegreferenz: bon.saleId,
+            ausgang: 'abgebrochen',
+            meldung: grund,
+          },
+          bon.saleId + '-tse-aufgeloest',
+          bon.saleId,
+        )
+      }
       if (ergebnis.art === 'ausgefallen') {
         this.onLog(
           'TSE-Transaktion ' +
@@ -599,6 +847,30 @@ export class Kasse {
     if (ergebnis.art === 'ausgefallen') {
       // Regel 8: der Verkauf laeuft weiter, der Ausfall wird protokolliert.
       this.onLog('TSE ausgefallen — Beleg traegt den Hinweis, Signatur wird nachgeholt.')
+    }
+
+    // --- Signaturdaten in den Log, sofort ---
+    //
+    // Hier ist der Absturzpunkt, den sonst niemand faende: die Transaktion ist
+    // beendet, steht also nirgends mehr offen. Ohne dieses Ereignis waeren die
+    // Signaturdaten dauerhaft aus dem Log verschwunden.
+    //
+    // Scheitert das Schreiben, wird der Verkauf **nicht** abgebrochen: der
+    // Vorgang ist signiert, der Kunde hat bezahlt, und den Beleg deswegen nicht
+    // auszugeben waere der groessere Schaden. Die Luecke wird gemeldet und beim
+    // naechsten Start nachgetragen.
+    try {
+      if (signatur !== undefined) {
+        await this.haltefestSignatur(bon.saleId, signatur)
+      } else {
+        await this.haltefestAusfall(bon.saleId, ausfallgrund ?? 'Keine Signatur')
+      }
+    } catch (fehler) {
+      this.onLog(
+        'Signaturdaten nicht in den Log geschrieben: ' +
+          (fehler instanceof Error ? fehler.message : String(fehler)) +
+          ' — sie werden beim naechsten Start nachgetragen.',
+      )
     }
 
     // --- Beleg ---

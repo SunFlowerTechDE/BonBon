@@ -56,6 +56,15 @@ export interface MockTseGespeichert {
     readonly belegreferenz: string
     readonly startzeit: string
   }[]
+  /**
+   * Die erteilten Signaturen, nach Belegreferenz.
+   *
+   * Eine echte TSE fuehrt dafuer ihr Journal. Der Mock haelt sie im Zustand,
+   * damit `signaturZu` nach einem Neustart noch antworten kann — sonst liesse
+   * sich der Fall „abgestuerzt zwischen Signatur und Log" nicht nachstellen,
+   * und der Test dafuer waere wertlos.
+   */
+  readonly signaturen?: Readonly<Record<string, TseSignatur>>
 }
 
 /**
@@ -123,6 +132,7 @@ export class MockTse implements TsePort {
   private transaktionsnummer = 0
   private signaturzaehler = 0
   private offene: OffeneMockTransaktion[] = []
+  private signaturen = new Map<string, TseSignatur>()
 
   /** Vorgaenge, die signiert wurden — fuer Tests und die Anzeige. */
   readonly signierteVorgaenge: { belegreferenz: string; transaktionsnummer: number }[] = []
@@ -150,6 +160,7 @@ export class MockTse implements TsePort {
     this.transaktionsnummer = gespeichert.transaktionsnummer
     this.signaturzaehler = gespeichert.signaturzaehler
     this.offene = gespeichert.offene.map((o) => ({ ...o }))
+    this.signaturen = new Map(Object.entries(gespeichert.signaturen ?? {}))
     this.onLog(
       'TSE-Zustand uebernommen: Transaktion ' +
         String(this.transaktionsnummer) +
@@ -167,6 +178,7 @@ export class MockTse implements TsePort {
       transaktionsnummer: this.transaktionsnummer,
       signaturzaehler: this.signaturzaehler,
       offene: this.offene.map((o) => ({ ...o })),
+      signaturen: Object.fromEntries(this.signaturen),
     })
   }
 
@@ -214,6 +226,16 @@ export class MockTse implements TsePort {
     )
   }
 
+  async signaturZu(belegreferenz: string): Promise<TseSignatur | undefined> {
+    if (this.fehler.art === 'ausgefallen') {
+      // Nicht `undefined`: „ich weiss es nicht" ist etwas anderes als „gibt es
+      // nicht", und nur der zweite Fall rechtfertigt es, eine Luecke als
+      // endgueltig zu vermerken.
+      throw new Error(this.fehler.grund ?? 'TSE nicht erreichbar')
+    }
+    return Promise.resolve(this.signaturen.get(belegreferenz))
+  }
+
   async beginneTransaktion(anfrage: Transaktionsbeginn): Promise<Transaktionsergebnis> {
     if (this.fehler.art === 'langsam') await schlafen(this.fehler.verzoegerungMs)
     if (this.fehler.art === 'ausgefallen') {
@@ -252,15 +274,21 @@ export class MockTse implements TsePort {
       return { art: 'ausgefallen', grund }
     }
 
-    const nummer = Number(anfrage.transaktionsnummer)
-    const index = this.offene.findIndex((o) => o.transaktionsnummer === nummer)
+    // Ueber die Nummer, sonst ueber die Belegreferenz — der fiskaltrust-Weg.
+    const index =
+      anfrage.transaktionsnummer !== undefined
+        ? this.offene.findIndex((o) => o.transaktionsnummer === Number(anfrage.transaktionsnummer))
+        : this.offene.findIndex((o) => o.belegreferenz === anfrage.belegreferenz)
     if (index === -1) {
       // Nicht offen — das ist kein Erfolg, und es wird auch nicht so gemeldet.
       return {
         art: 'ausgefallen',
-        grund: 'Transaktion ' + anfrage.transaktionsnummer + ' ist nicht offen',
+        grund:
+          'Nicht offen: ' +
+          (anfrage.transaktionsnummer ?? anfrage.belegreferenz ?? '(ohne Angabe)'),
       }
     }
+    const nummer = this.offene[index]?.transaktionsnummer ?? 0
 
     this.offene.splice(index, 1)
     this.signaturzaehler += 1
@@ -337,6 +365,7 @@ export class MockTse implements TsePort {
       zeitformat: 'utcTimeWithSeconds',
     }
 
+    this.signaturen.set(anfrage.belegreferenz, signatur)
     await this.sichere()
     this.signierteVorgaenge.push({
       belegreferenz: anfrage.belegreferenz,
@@ -350,6 +379,7 @@ export class MockTse implements TsePort {
     this.transaktionsnummer = 0
     this.signaturzaehler = 0
     this.offene = []
+    this.signaturen.clear()
     this.signierteVorgaenge.length = 0
     this.abgebrocheneVorgaenge.length = 0
     this.fehler = { art: 'keiner' }

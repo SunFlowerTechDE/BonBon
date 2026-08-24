@@ -72,15 +72,27 @@ export type Transaktionsergebnis =
   | { readonly art: 'begonnen'; readonly transaktion: OffeneTransaktion }
   | { readonly art: 'ausgefallen'; readonly grund: string }
 
+/**
+ * Was abgebrochen werden soll.
+ *
+ * **Mindestens eines von beiden muss gesetzt sein.** Gemessen am laufenden
+ * fiskaltrust-Launcher: die Antwort auf `start-transaction` enthaelt genau eine
+ * Signatur (`start-transaction-signature`) und **keine Transaktionsnummer** —
+ * die Middleware fuehrt die Zuordnung selbst ueber `cbReceiptReference`. Der
+ * explizite Fail-Transaction-Beleg braucht deshalb nur die Referenz.
+ *
+ * Andere Geraete (Swissbit direkt) kennen umgekehrt nur Nummern. Der Port
+ * traegt beides und laesst den Adapter entscheiden, was er benutzt.
+ */
 export interface Abbruchanfrage {
-  readonly transaktionsnummer: string
+  readonly transaktionsnummer?: string
   readonly belegreferenz?: string
   /** Klartext fuers Protokoll — warum die Transaktion abgebrochen wird. */
   readonly grund: string
 }
 
 export type Abbruchergebnis =
-  | { readonly art: 'abgebrochen'; readonly transaktionsnummer: string }
+  | { readonly art: 'abgebrochen'; readonly transaktionsnummer?: string }
   | { readonly art: 'ausgefallen'; readonly grund: string }
 
 // --- Abschluss --------------------------------------------------------------
@@ -133,7 +145,7 @@ export type Signierergebnis =
  * | `beginneTransaktion` | `ftReceiptCase 0x4445000000000008` (Start-Transaction) |
  * | `signiere` | Kassenbeleg, beendet die Transaktion |
  * | `brichTransaktionAb` | `ftReceiptCase 0x444500000000000B` (Fail-Transaction) |
- * | `offeneTransaktionen` | Zero-Receipt `0x4445000000000002`; die Antwort traegt den TSE-Status mit `CurrentStartedTransactionNumbers` |
+ * | `offeneTransaktionen` | **nicht ueber die POS-Schnittstelle abfragbar** — siehe unten |
  *
  * Zum Abbrechen kennt die Middleware zwei Wege. **Explizit** schliesst genau
  * eine Transaktion, referenziert ueber `cbReceiptReference`. **Implizit**
@@ -143,9 +155,25 @@ export type Signierergebnis =
  * Der implizite Weg schliesst auch Transaktionen, die nicht von der Middleware
  * geoeffnet wurden; genau die entstehen bei einem Absturz.
  *
- * **Offen fuer M3:** welcher `ftSignatureType` die Nummern in der Antwort des
- * Zero-Receipts traegt, ist hier nicht belegt. Der Adapter muss das am
- * laufenden Launcher nachsehen, nicht raten.
+ * ## Was `offeneTransaktionen()` bei fiskaltrust liefern kann — gemessen
+ *
+ * Die Dokumentation legt nahe, die Antwort des Zero-Receipts trage einen
+ * TSE-Status mit `CurrentStartedTransactionNumbers`. **Am laufenden Launcher
+ * gemessen stimmt das nicht.** Die Antwort enthaelt 16 Signaturen, von
+ * `start-transaction-result` bis `<public-key>`; keine davon fuehrt offene
+ * Transaktionen auf. Der Journal-Endpunkt beantwortet jeden versuchten
+ * `ftJournalType` mit derselben Versionsauskunft.
+ *
+ * `CurrentStartedTransactionNumbers` ist ein **ausgehendes** Feld: es geht im
+ * `ftReceiptCaseData` eines impliziten Fail-Transaction-Belegs mit, um
+ * Transaktionen zu schliessen, die die Middleware nicht kennt. Zum Abfragen
+ * ist es nicht da.
+ *
+ * Folge fuer den Entwurf: **der Event Log ist die Quelle, nicht die TSE.** Die
+ * Kasse haelt fest, wann sie eine Transaktion geoeffnet hat, und weiss damit
+ * selbst, was offen steht. `offeneTransaktionen()` bleibt als zweite Quelle
+ * fuer Reste, die nicht von dieser Kasse stammen — und fuer Geraete, die die
+ * Frage beantworten koennen. Wirft die Methode, ist das kein Beinbruch mehr.
  */
 export interface TsePort {
   readonly info: { readonly target: string }
@@ -159,6 +187,23 @@ export interface TsePort {
 
   /** Beendet eine Transaktion als abgebrochen — ohne Beleg, mit Grund. */
   brichTransaktionAb(anfrage: Abbruchanfrage): Promise<Abbruchergebnis>
+
+  /**
+   * Sucht die Signaturdaten zu einer Belegreferenz.
+   *
+   * Fuer den Fall, dass die Kasse zwischen der Rueckkehr der Signatur und dem
+   * Festhalten im Log abgestuerzt ist. Der Abgleich ueber offene Transaktionen
+   * findet das **nicht**: die Transaktion ist ja abgeschlossen. Ohne diese
+   * Frage waeren die Signaturdaten dauerhaft aus dem Log verschwunden, und
+   * niemand haette sie je vermisst.
+   *
+   * `undefined` heisst „die TSE kennt zu dieser Referenz keine Signatur".
+   * Antwortet die TSE gar nicht, wird geworfen — das ist etwas anderes und
+   * darf nicht als „gibt es nicht" durchgehen.
+   *
+   * Bei fiskaltrust (M3): ueber das Journal zur `cbReceiptReference`.
+   */
+  signaturZu(belegreferenz: string): Promise<TseSignatur | undefined>
 
   /**
    * Was gerade offen steht.

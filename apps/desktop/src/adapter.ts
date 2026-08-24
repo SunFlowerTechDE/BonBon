@@ -314,10 +314,26 @@ export function baueTse(
 
 // --- Event Log -------------------------------------------------------------
 
+/**
+ * Ein Ereignis im Log, mit der Belegzuordnung.
+ *
+ * `saleId` steht als eigene Spalte in der Datenbank und **nicht** in der
+ * Hash-Eingabe. Die Kette bleibt damit unveraendert; faelschbar ist die Spalte
+ * trotzdem nicht, weil sie aus dem gehashten Payload ableitbar ist.
+ */
+export type ProtokollEreignis = ChainedEvent & { readonly saleId?: string }
+
 export interface EventLogPort {
   readonly info: { readonly target: string }
   /** Hängt ein Ereignis an und gibt es verkettet zurück. */
-  anhaengen(deviceId: string, type: string, payload: string, occurredAt: string, id: string): Promise<ChainedEvent>
+  anhaengen(
+    deviceId: string,
+    type: string,
+    payload: string,
+    occurredAt: string,
+    id: string,
+    saleId?: string,
+  ): Promise<ProtokollEreignis>
   anzahl(): Promise<number>
   /**
    * Das zuletzt geschriebene Ereignis eines Typs.
@@ -327,15 +343,27 @@ export interface EventLogPort {
    * fragilere Weg — sie stimmt nur, solange jeder begonnene Bon auch
    * abgeschlossen wird.
    */
-  letztesEreignis(deviceId: string, type: string): Promise<ChainedEvent | undefined>
-  /** Alle Ereignisse ab einer Sequenznummer, aufsteigend. */
-  ereignisseAb(deviceId: string, abSeq: number): Promise<readonly ChainedEvent[]>
+  letztesEreignis(deviceId: string, type: string): Promise<ProtokollEreignis | undefined>
+  /** Alle Ereignisse eines Belegs, aufsteigend. */
+  ereignisseZuBeleg(deviceId: string, saleId: string): Promise<readonly ProtokollEreignis[]>
+  /**
+   * Belege, die bestimmte Ereignistypen haben — und andere nicht.
+   *
+   * Damit findet die Kasse beim Start unbeendete Bons und Bons ohne
+   * Signaturnachweis, jeweils in einer Abfrage und ueber **alle** Belege, nicht
+   * nur den letzten. Aeltester zuerst.
+   */
+  belege(
+    deviceId: string,
+    enthaelt: readonly string[],
+    enthaeltNicht: readonly string[],
+  ): Promise<readonly string[]>
 }
 
 /** Event Log im Arbeitsspeicher — für den Entwicklungsbetrieb ohne Rust-Teil. */
 export class SpeicherEventLog implements EventLogPort {
   readonly info = { target: 'speicher://eventlog' }
-  readonly ereignisse: ChainedEvent[] = []
+  readonly ereignisse: ProtokollEreignis[] = []
 
   constructor(
     private readonly hasher: Hasher,
@@ -348,7 +376,13 @@ export class SpeicherEventLog implements EventLogPort {
     payload: string,
     occurredAt: string,
     id: string,
-  ): Promise<ChainedEvent> {
+    saleId?: string,
+  ): Promise<ProtokollEreignis> {
+    if (this.ereignisse.some((e) => e.id === id)) {
+      // Dieselbe Bedingung wie der Primaerschluessel in SQLite. Ein Mock, der
+      // sie nicht hat, liesse den Fehler erst im Betrieb auffallen.
+      throw new Error('Ereignis-Id bereits vergeben: ' + id)
+    }
     const letzter = this.ereignisse.filter((e) => e.deviceId === deviceId).at(-1)
     const event: SaleEvent = {
       id,
@@ -358,7 +392,10 @@ export class SpeicherEventLog implements EventLogPort {
       type,
       payload,
     }
-    const verkettet = chainEvent(letzter?.hash ?? GENESIS_HASH, event, this.hasher)
+    const verkettet: ProtokollEreignis = {
+      ...chainEvent(letzter?.hash ?? GENESIS_HASH, event, this.hasher),
+      ...(saleId === undefined ? {} : { saleId }),
+    }
     this.ereignisse.push(verkettet)
     this.onLog('Ereignis ' + String(verkettet.seq) + ': ' + type)
     return Promise.resolve(verkettet)
@@ -368,14 +405,40 @@ export class SpeicherEventLog implements EventLogPort {
     return Promise.resolve(this.ereignisse.length)
   }
 
-  async letztesEreignis(deviceId: string, type: string): Promise<ChainedEvent | undefined> {
+  async letztesEreignis(deviceId: string, type: string): Promise<ProtokollEreignis | undefined> {
     return Promise.resolve(
       this.ereignisse.filter((e) => e.deviceId === deviceId && e.type === type).at(-1),
     )
   }
 
-  async ereignisseAb(deviceId: string, abSeq: number): Promise<readonly ChainedEvent[]> {
-    return Promise.resolve(this.ereignisse.filter((e) => e.deviceId === deviceId && e.seq >= abSeq))
+  async ereignisseZuBeleg(deviceId: string, saleId: string): Promise<readonly ProtokollEreignis[]> {
+    return Promise.resolve(
+      this.ereignisse.filter((e) => e.deviceId === deviceId && e.saleId === saleId),
+    )
+  }
+
+  async belege(
+    deviceId: string,
+    enthaelt: readonly string[],
+    enthaeltNicht: readonly string[],
+  ): Promise<readonly string[]> {
+    const gefunden: string[] = []
+    for (const ereignis of this.ereignisse) {
+      if (ereignis.deviceId !== deviceId || ereignis.saleId === undefined) continue
+      if (!gefunden.includes(ereignis.saleId)) gefunden.push(ereignis.saleId)
+    }
+    const typenVon = (saleId: string): string[] =>
+      this.ereignisse
+        .filter((e) => e.deviceId === deviceId && e.saleId === saleId)
+        .map((e) => e.type)
+    return Promise.resolve(
+      gefunden.filter((saleId) => {
+        const typen = typenVon(saleId)
+        const hat = enthaelt.length === 0 || typen.some((t) => enthaelt.includes(t))
+        const hatNicht = !typen.some((t) => enthaeltNicht.includes(t))
+        return hat && hatNicht
+      }),
+    )
   }
 }
 
@@ -396,14 +459,16 @@ class TauriEventLog implements EventLogPort {
     payload: string,
     occurredAt: string,
     id: string,
-  ): Promise<ChainedEvent> {
-    const ergebnis = await invoke<ChainedEvent>('eventlog_anhaengen', {
+    saleId?: string,
+  ): Promise<ProtokollEreignis> {
+    const ergebnis = await invoke<ProtokollEreignis>('eventlog_anhaengen', {
       pfad: this.pfad,
       deviceId,
       type,
       payload,
       occurredAt,
       id,
+      saleId: saleId ?? null,
     })
     this.onLog('Ereignis ' + String(ergebnis.seq) + ': ' + type)
     return ergebnis
@@ -413,8 +478,8 @@ class TauriEventLog implements EventLogPort {
     return invoke<number>('eventlog_anzahl', { pfad: this.pfad })
   }
 
-  async letztesEreignis(deviceId: string, type: string): Promise<ChainedEvent | undefined> {
-    const gefunden = await invoke<ChainedEvent | null>('eventlog_letztes_ereignis', {
+  async letztesEreignis(deviceId: string, type: string): Promise<ProtokollEreignis | undefined> {
+    const gefunden = await invoke<ProtokollEreignis | null>('eventlog_letztes_ereignis', {
       pfad: this.pfad,
       deviceId,
       type,
@@ -422,11 +487,24 @@ class TauriEventLog implements EventLogPort {
     return gefunden ?? undefined
   }
 
-  async ereignisseAb(deviceId: string, abSeq: number): Promise<readonly ChainedEvent[]> {
-    return invoke<ChainedEvent[]>('eventlog_ereignisse_ab', {
+  async ereignisseZuBeleg(deviceId: string, saleId: string): Promise<readonly ProtokollEreignis[]> {
+    return invoke<ProtokollEreignis[]>('eventlog_ereignisse_zu_beleg', {
       pfad: this.pfad,
       deviceId,
-      abSeq,
+      saleId,
+    })
+  }
+
+  async belege(
+    deviceId: string,
+    enthaelt: readonly string[],
+    enthaeltNicht: readonly string[],
+  ): Promise<readonly string[]> {
+    return invoke<string[]>('eventlog_belege', {
+      pfad: this.pfad,
+      deviceId,
+      enthaelt,
+      enthaeltNicht,
     })
   }
 }

@@ -133,7 +133,7 @@ fn kette_pruefen(pfad: &str, erwartete_anzahl: i64) -> Vec<VerkettetesEreignis> 
 
     let mut abfrage = db
         .prepare(
-            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash
+            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
              FROM sale_events ORDER BY seq",
         )
         .expect("Abfrage nicht vorbereitbar");
@@ -148,6 +148,7 @@ fn kette_pruefen(pfad: &str, erwartete_anzahl: i64) -> Vec<VerkettetesEreignis> 
                 payload: z.get(5)?,
                 prev_hash: z.get(6)?,
                 hash: z.get(7)?,
+                sale_id: z.get(8)?,
             })
         })
         .expect("Abfrage fehlgeschlagen")
@@ -199,6 +200,7 @@ fn ereignis_anhaengen(
             "payload": format!(r#"{{"artikel":"Cappuccino","nummer":{nummer}}}"#),
             "occurredAt": format!("2026-08-24T09:{nummer:02}:00.000Z"),
             "id": format!("evt-{nummer}"),
+            "saleId": format!("{geraet}-BON"),
         }),
     )
     .unwrap_or_else(|f| panic!("eventlog_anhaengen fehlgeschlagen: {f}"))
@@ -395,7 +397,7 @@ fn letztes_ereignis_findet_den_zuletzt_begonnenen_bon() {
     let pfad = frischer_datenbankpfad("letztes");
     let (_app, webview) = kasse();
 
-    let schreibe = |typ: &str, geraet: &str, nummer: i64, nutzlast: &str| {
+    let schreibe = |typ: &str, geraet: &str, nummer: i64, nutzlast: &str, beleg: &str| {
         let _: VerkettetesEreignis = rufe(
             &webview,
             "eventlog_anhaengen",
@@ -406,6 +408,7 @@ fn letztes_ereignis_findet_den_zuletzt_begonnenen_bon() {
                 "payload": nutzlast,
                 "occurredAt": format!("2026-08-24T10:{nummer:02}:00.000Z"),
                 "id": format!("{geraet}-{typ}-{nummer}"),
+                "saleId": beleg,
             }),
         )
         .unwrap_or_else(|f| panic!("eventlog_anhaengen fehlgeschlagen: {f}"));
@@ -425,14 +428,15 @@ fn letztes_ereignis_findet_den_zuletzt_begonnenen_bon() {
         "Ohne Ereignisse darf nichts gefunden werden"
     );
 
-    schreibe("SaleStarted", "KASSE-A", 1, r#"{"saleId":"K-00001"}"#);
-    schreibe("LineAdded", "KASSE-A", 2, "{}");
-    schreibe("SaleStarted", "KASSE-A", 3, r#"{"saleId":"K-00002"}"#);
-    schreibe("SaleStarted", "KASSE-B", 4, r#"{"saleId":"X-00009"}"#);
+    schreibe("SaleStarted", "KASSE-A", 1, r#"{"saleId":"K-00001"}"#, "K-00001");
+    schreibe("LineAdded", "KASSE-A", 2, "{}", "K-00001");
+    schreibe("SaleFinished", "KASSE-A", 3, "{}", "K-00001");
+    schreibe("SaleStarted", "KASSE-A", 4, r#"{"saleId":"K-00002"}"#, "K-00002");
+    schreibe("SaleStarted", "KASSE-B", 5, r#"{"saleId":"X-00009"}"#, "X-00009");
 
     let a = letztes("KASSE-A", "SaleStarted").expect("SaleStarted fehlt");
     assert_eq!(a.payload, r#"{"saleId":"K-00002"}"#, "Nicht das letzte gefunden");
-    assert_eq!(a.seq, 3);
+    assert_eq!(a.seq, 4);
 
     let b = letztes("KASSE-B", "SaleStarted").expect("SaleStarted fehlt");
     assert_eq!(
@@ -440,17 +444,99 @@ fn letztes_ereignis_findet_den_zuletzt_begonnenen_bon() {
         "Fremdes Geraet nicht getrennt"
     );
 
-    // Und der Bon selbst, ab seiner eigenen Sequenznummer.
+    // Und der Bon selbst, ueber seine Belegnummer.
     let bon: Vec<VerkettetesEreignis> = rufe(
         &webview,
-        "eventlog_ereignisse_ab",
-        serde_json::json!({ "pfad": pfad, "deviceId": "KASSE-A", "abSeq": a.seq }),
+        "eventlog_ereignisse_zu_beleg",
+        serde_json::json!({ "pfad": pfad, "deviceId": "KASSE-A", "saleId": "K-00001" }),
     )
-    .unwrap_or_else(|f| panic!("eventlog_ereignisse_ab fehlgeschlagen: {f}"));
+    .unwrap_or_else(|f| panic!("eventlog_ereignisse_zu_beleg fehlgeschlagen: {f}"));
     assert_eq!(
         bon.iter().map(|e| e.typ.as_str()).collect::<Vec<_>>(),
-        vec!["SaleStarted"],
-        "Der zuletzt begonnene Bon hat genau ein Ereignis"
+        vec!["SaleStarted", "LineAdded", "SaleFinished"],
+        "Der Bon kam nicht vollstaendig oder nicht in Reihenfolge zurueck"
+    );
+}
+
+/// `eventlog_belege` trennt „hat" von „hat nicht" — und Geraet von Geraet.
+///
+/// Daran haengen beide Abgleiche beim Start: unbeendete Bons und Bons ohne
+/// Signaturnachweis. Faende die Abfrage zu viel, wuerde ein abgeschlossener
+/// Vorgang abgebrochen; faende sie zu wenig, bliebe eine Luecke stehen.
+#[test]
+fn belege_findet_was_fehlt_und_was_da_ist() {
+    let pfad = frischer_datenbankpfad("belege");
+    let (_app, webview) = kasse();
+    let mut nummer = 0;
+
+    let mut schreibe = |geraet: &str, beleg: &str, typ: &str| {
+        nummer += 1;
+        let _: VerkettetesEreignis = rufe(
+            &webview,
+            "eventlog_anhaengen",
+            serde_json::json!({
+                "pfad": pfad,
+                "deviceId": geraet,
+                "type": typ,
+                "payload": "{}",
+                "occurredAt": format!("2026-08-24T11:{nummer:02}:00.000Z"),
+                "id": format!("{beleg}-{typ}-{nummer}"),
+                "saleId": beleg,
+            }),
+        )
+        .unwrap_or_else(|f| panic!("eventlog_anhaengen fehlgeschlagen: {f}"));
+    };
+
+    // A: sauber durch. B: begonnen, nie beendet. C: abgeschlossen, aber ohne
+    // Signaturnachweis. D: abgebrochen. E: auf einem anderen Geraet, offen.
+    schreibe("K1", "A", "SaleStarted");
+    schreibe("K1", "A", "SaleFinished");
+    schreibe("K1", "A", "TseSignaturErfasst");
+    schreibe("K1", "B", "SaleStarted");
+    schreibe("K1", "C", "SaleStarted");
+    schreibe("K1", "C", "SaleFinished");
+    schreibe("K1", "D", "SaleStarted");
+    schreibe("K1", "D", "SaleCancelled");
+    schreibe("K2", "E", "SaleStarted");
+
+    let belege = |geraet: &str, hat: Vec<&str>, hat_nicht: Vec<&str>| -> Vec<String> {
+        rufe(
+            &webview,
+            "eventlog_belege",
+            serde_json::json!({
+                "pfad": pfad,
+                "deviceId": geraet,
+                "enthaelt": hat,
+                "enthaeltNicht": hat_nicht,
+            }),
+        )
+        .unwrap_or_else(|f| panic!("eventlog_belege fehlgeschlagen: {f}"))
+    };
+
+    assert_eq!(
+        belege("K1", vec!["SaleStarted"], vec!["SaleFinished", "SaleCancelled"]),
+        vec!["B".to_string()],
+        "Unbeendete Bons falsch bestimmt"
+    );
+    assert_eq!(
+        belege(
+            "K1",
+            vec!["SaleFinished"],
+            vec!["TseSignaturErfasst", "TseSignaturAusgefallen"]
+        ),
+        vec!["C".to_string()],
+        "Bons ohne Signaturnachweis falsch bestimmt"
+    );
+    assert_eq!(
+        belege("K2", vec!["SaleStarted"], vec!["SaleFinished", "SaleCancelled"]),
+        vec!["E".to_string()],
+        "Geraete nicht getrennt"
+    );
+    // Leere Listen sind neutral: alle Belege des Geraets.
+    assert_eq!(
+        belege("K1", vec![], vec![]),
+        vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()],
+        "Ohne Bedingung muessen alle Belege kommen, aeltester zuerst"
     );
 }
 
