@@ -540,6 +540,78 @@ fn belege_findet_was_fehlt_und_was_da_ist() {
     );
 }
 
+/// Eine zweite Kasse auf derselben Datei wird abgewiesen — mit einer Meldung.
+///
+/// Zwei laufende Kassen auf einem Event Log waeren ernst: doppelte
+/// Belegnummern, konkurrierende Sequenznummern, zwei Haelften einer Hash-Kette.
+/// SQLite selbst liesse das anstandslos zu. Das Problem bestand vorher auch
+/// schon, nur unsichtbar — jeder Aufruf oeffnete seine eigene Verbindung.
+#[test]
+#[cfg(windows)]
+fn sperre_weist_eine_zweite_kasse_ab() {
+    let pfad = frischer_datenbankpfad("sperre");
+    let _ = std::fs::remove_file(format!("{pfad}.lock"));
+
+    // Erste Kasse: oeffnet und haelt.
+    mit_datenbank(&pfad, |_| Ok(())).expect("Erste Kasse konnte nicht oeffnen");
+
+    // Zweite Kasse auf derselben Datei.
+    let zweite = sperre_nehmen(&pfad);
+    let meldung = zweite.err().expect("Die zweite Kasse haette abgewiesen werden muessen");
+    assert!(
+        meldung.contains("andere Kasse"),
+        "Die Meldung nennt den Grund nicht: {meldung}"
+    );
+    assert!(
+        meldung.contains("Hash-Kette"),
+        "Die Meldung sagt nicht, was auf dem Spiel steht: {meldung}"
+    );
+
+    // Und die erste arbeitet weiter — die abgewiesene zweite hat sie nicht
+    // gestoert.
+    mit_datenbank(&pfad, |v| {
+        v.execute_batch("SELECT 1").map_err(|e| e.to_string())
+    })
+    .expect("Die erste Kasse arbeitet nicht mehr");
+}
+
+/// Ein Pfadwechsel schliesst die alte Datenbank und oeffnet die neue.
+#[test]
+fn pfadwechsel_schliesst_die_alte_datenbank() {
+    let a = frischer_datenbankpfad("wechsel-a");
+    let b = frischer_datenbankpfad("wechsel-b");
+    for p in [&a, &b] {
+        let _ = std::fs::remove_file(format!("{p}.lock"));
+    }
+
+    mit_datenbank(&a, |v| {
+        v.execute(
+            "INSERT INTO sale_events
+               (id, device_id, seq, occurred_at, type, payload, prev_hash, hash)
+             VALUES ('x','K',1,'t','T','{}','0','1')",
+            [],
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("A nicht beschreibbar");
+
+    // Wechsel: die neue Datenbank ist leer, die alte bleibt erhalten.
+    let inB: i64 = mit_datenbank(&b, |v| {
+        v.query_row("SELECT COUNT(*) FROM sale_events", [], |z| z.get(0))
+            .map_err(|e| e.to_string())
+    })
+    .expect("B nicht lesbar");
+    assert_eq!(inB, 0, "Die neue Datenbank ist nicht leer");
+
+    // Zurueck: die Zeile aus A steht noch.
+    let inA: i64 = mit_datenbank(&a, |v| {
+        v.query_row("SELECT COUNT(*) FROM sale_events", [], |z| z.get(0))
+            .map_err(|e| e.to_string())
+    })
+    .expect("A nicht lesbar");
+    assert_eq!(inA, 1, "Die alte Datenbank hat ihren Inhalt verloren");
+}
+
 /// Dateien: fehlend, vorhanden, unlesbar sind drei verschiedene Antworten.
 #[test]
 fn datei_lesen_trennt_fehlend_von_fehlerhaft() {

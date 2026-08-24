@@ -7,7 +7,17 @@
  * Abschluss. Ein Log, der erst am Ende schreibt, ist kein append-only-Log: bis
  * dahin liegt der ganze Vorgang nur im Arbeitsspeicher, und ein Absturz nimmt
  * ihn spurlos mit. Der Messwert aus dem M0-Lasttest traegt das: einzeln
- * geschriebene Ereignisse kosteten unter Stosslast p99 1,4 ms.
+ * geschriebene Ereignisse kosteten unter Stosslast p99 1,4 ms — **gemessen mit
+ * einer bestehenden Verbindung**, in einem Node-Prozess, ohne IPC.
+ *
+ * Diese Bedingung war der Fehler. Der Rust-Teil oeffnete anfangs bei jedem
+ * Aufruf eine neue Verbindung samt PRAGMA, Schema und Spaltenpruefung; der
+ * Diagnose-Modus mass daraufhin **110 ms im Mittel** je Schreibvorgang und bis
+ * zu einer Sekunde je Bon. Mit dauerhafter Verbindung sind es **3 ms** — der
+ * Rest ist die IPC-Runde, die der Lasttest nicht hatte.
+ *
+ * Merke fuer den naechsten Messwert: eine Zahl ohne ihre Bedingung ist keine
+ * Begruendung. Sie stand hier eine Runde lang und hat den Fehler gedeckt.
  *
  * Daraus folgt, dass die schreibenden Methoden asynchron sind. Das ist keine
  * Unbequemlichkeit, sondern die ehrliche Form: ein Ereignis ist erst erfasst,

@@ -66,6 +66,7 @@ export function App(): JSX.Element {
   const [tseZustand, setTseZustand] = useState<TseZustand | undefined>()
   const [letzterAbschluss, setLetzterAbschluss] = useState<Abschlussergebnis | undefined>()
   const [fehler, setFehler] = useState<string | undefined>()
+  const [einrichtungsfehler, setEinrichtungsfehler] = useState<string | undefined>()
 
   const kasseRef = useRef<Kasse | undefined>(undefined)
   const druckerRef = useRef<PrinterPort | undefined>(undefined)
@@ -83,6 +84,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     let abgebrochen = false
     void (async () => {
+      try {
       const dateien = baueDateien()
       const k = await ladeKonfiguration(dateien, melde)
       if (abgebrochen) return
@@ -119,6 +121,13 @@ export function App(): JSX.Element {
       setTseZustand(await tse.zustand())
       if (!laeuftInTauri()) {
         melde('Läuft im Browser — Vorschaudrucker und Speicher-Event-Log.')
+      }
+      } catch (fehler) {
+        // Ohne das bliebe die Kasse bei „wird eingerichtet …" stehen, und
+        // niemand erfuehre, warum. Der haeufigste Fall ist eine zweite Kasse
+        // auf derselben Datenbank — die Meldung sagt das im Klartext.
+        if (abgebrochen) return
+        setEinrichtungsfehler(fehler instanceof Error ? fehler.message : String(fehler))
       }
     })()
     return () => {
@@ -256,6 +265,17 @@ export function App(): JSX.Element {
     setVerzehrartProminent(verzehrartWirksam)
   } else if (verzehrartWirksam && !verzehrartProminent) {
     setVerzehrartProminent(true)
+  }
+
+  if (einrichtungsfehler !== undefined) {
+    return (
+      <div className="laden">
+        <p className="fehler" role="alert">
+          Die Kasse konnte nicht eingerichtet werden.
+        </p>
+        <p>{einrichtungsfehler}</p>
+      </div>
+    )
   }
 
   if (konfiguration === undefined) {

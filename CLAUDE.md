@@ -376,7 +376,11 @@ Gefunden im M2-Beweislauf, und nur dort zu finden: `bonNummer` lebte im Arbeitss
 
 `SaleStarted` beim Öffnen des Bons, `LineAdded` beim Antippen, `DiningModeChanged` beim Umschalten — jeweils sofort, nicht beim Abschluss. Ein Log, der erst am Ende schreibt, ist kein append-only-Log: bis dahin liegt der ganze Vorgang im Arbeitsspeicher, und ein Absturz nimmt ihn spurlos mit.
 
-Der Preis ist gemessen und tragbar: im M0-Lasttest kosteten einzeln geschriebene Ereignisse unter Stoßlast **p99 1,4 ms**.
+Der Preis ist gemessen und tragbar: im M0-Lasttest kosteten einzeln geschriebene Ereignisse unter Stoßlast **p99 1,4 ms** — gemessen **mit einer bestehenden Verbindung**, in einem Node-Prozess, ohne IPC.
+
+**Die Bedingung gehört zur Zahl.** Der Rust-Teil öffnete anfangs bei jedem Aufruf eine neue Verbindung samt PRAGMA, Schema und Spaltenprüfung. Der Diagnose-Modus (Regel 21) maß daraufhin **110 ms im Mittel** je Schreibvorgang und bis zu einer Sekunde je Bon — bei einer Zahl, die im Code als „trägt" zitiert wurde. Mit dauerhafter Verbindung sind es **3 ms**; der Rest gegenüber dem Lasttest ist die IPC-Runde.
+
+Eine Zahl ohne ihre Bedingung ist keine Begründung, sondern eine Beruhigung. Diese hier hat den Fehler eine Runde lang gedeckt.
 
 **Erst schreiben, dann übernehmen.** Scheitert das Schreiben, hat auch der Bon das Ereignis nicht. Sonst zeigte die Kasse eine Position, die nirgends steht.
 
@@ -512,6 +516,31 @@ Die Messung beginnt beim **ersten Artikeltipp**, nicht bei einem Startknopf. Son
 Als Uhr dient eine **monotone** Quelle, nicht die Wanduhr. Wer die Systemzeit stellt oder eine Zeitumstellung erwischt, bekommt sonst negative Abstände — derselbe Fehler wie bei den TSE-Zeitstempeln in Regel 11, nur an anderer Stelle.
 
 
+
+### 22. Ein Testtreiber wartet nie auf eine Frist, sondern auf einen Zustand
+
+`await warte(300)` ist keine Synchronisation, sondern eine Wette. Sie geht so lange gut, bis die Anwendung an irgendeiner Stelle langsamer wird — und genau dann liefert das Werkzeug einen Befund, der wie ein Fehler in der Anwendung aussieht.
+
+**Ein Messwerkzeug, das falsche Befunde liefert, ist schlimmer als keines.** Der Satz stand schon im Code; er gehört in die Regeln, weil derselbe Fehler dreimal passiert ist:
+
+| | Was der Treiber wartete | Was er berichtete | Was wirklich war |
+|---|---|---|---|
+| 1 | 400 ms nach dem Klick auf den Zeilenumschalter | „Die Zeile hat sich nicht aufgespalten" | Sie hatte — 400 ms später |
+| 2 | gar nicht auf das Beenden der Vorgängerinstanz | drei Läufe widersprachen einander | Er redete mit dem alten Fenster |
+| 3 | 120 ms zwischen zwei Artikeltipps | „Schnellbetrag 20,00 nicht angeboten" | Der Bon stand bei 3,80 €, die Kasse arbeitete noch |
+
+Der dritte Fall ist der lehrreichste: ausgelöst hat ihn die zusätzliche Latenz des Event Logs — also **genau der Fehler, den zu finden das Werkzeug gebaut worden war**. Ein Treiber mit festen Fristen wird also ausgerechnet dann unzuverlässig, wenn er gebraucht wird.
+
+Deshalb:
+
+- **Gewartet wird auf eine beobachtbare Zustandsänderung**, mit einer Obergrenze, nach der der Treiber laut scheitert. Nicht auf eine Frist, nach der er weitermacht.
+- **Die Obergrenze ist großzügig und die Prüfung eng.** „Bis sich die Summe ändert, höchstens 5 Sekunden" ist richtig; „5 Sekunden warten, dann schauen" ist es nicht.
+- **Scheitert die Wartezeit, ist die Meldung eindeutig** („der Bon hat sich nach 5 Sekunden nicht geändert") — sonst sucht der nächste den Fehler wieder in der Anwendung.
+- **Vor dem Start wird aufgeräumt.** Ein Treiber, der sich an eine sterbende Vorgängerinstanz hängen kann, misst irgendwann etwas anderes, als er glaubt.
+
+Dasselbe gilt für Tests: eine Zeitquelle, die von außen kommt, ist einer echten Uhr vorzuziehen — dann muss überhaupt nicht gewartet werden (Regel 11, und der Diagnose-Modus macht es so).
+
+
 ---
 
 ## Struktur
@@ -571,7 +600,8 @@ Dieses Verzeichnis existiert, weil eine falsche Annahme in diesem Dokument teure
 | Fail-Transaction über `cbReceiptReference` schließt eine offene Transaktion | dieselbe Sonde, mit anschließender Kontrolle des `ftState` |
 | ESC/POS-Bon, Zeilenbreite, Umlaute, `GS !`-Verhalten | escpresso, byteweise gegen `testbon-referenz.bin` |
 | ZVT-Ablauf inklusive `unknown` und Storno | eigener Mock auf Port 20007 (M0) |
-| SQLite-Event-Log unter Last, Absturzsicherheit, p99 1,4 ms je Ereignis | `tools/eventlog-bench` |
+| SQLite-Event-Log unter Last, Absturzsicherheit, p99 1,4 ms je Ereignis (bestehende Verbindung, ohne IPC) | `tools/eventlog-bench` |
+| Event Log aus der laufenden Anwendung: 110 ms je Schreibvorgang mit Verbindung je Aufruf, 3 ms mit dauerhafter | Diagnose-Modus, je vier Verkäufe |
 | Der Rust-Weg der Tauri-App | `apps/desktop/src-tauri/src/pfadtests.rs` über die echte IPC-Brücke |
 | Ein Verkauf durch die gebaute Anwendung | `werkzeuge/verkauf-im-fenster.mjs` gegen die Release-Exe |
 | Steuersätze der Beispielartikel | nachgeschlagen mit Fundstelle (Regel 20) — **Vorbelegung, keine Auskunft** |

@@ -104,6 +104,34 @@ als eigene Spalte; eine Zahl, die man erst herleiten muss, wird nicht angesehen.
 Als Uhr dient `performance.now()`, nicht die Wanduhr — wer die Systemzeit stellt,
 bekommt sonst negative Abstände.
 
+### Was der Diagnose-Modus gefunden hat
+
+Beim ersten Lauf: **1040 von 1826 ms waren Maschine**, fast alles davon das Event
+Log. Der Grund lag im Rust-Teil — `eventlog_anhaengen` öffnete bei **jedem**
+Aufruf eine neue SQLite-Verbindung samt `PRAGMA journal_mode`, `synchronous`,
+`CREATE TABLE IF NOT EXISTS`, drei Indizes und der Spaltenprüfung für die
+Migration.
+
+Vorher und nachher, je vier Verkäufe mit demselben Werkzeug:
+
+| | vorher | nachher |
+|---|---|---|
+| Mittel je Schreibvorgang | 110 ms | **3 ms** |
+| Median | 70 ms | 2 ms |
+| Maximum | 311 ms | 28 ms |
+| Event Log je Verkauf | 455–1018 ms | **16–42 ms** |
+| Verkauf gesamt | 1620–1843 ms | **718–739 ms** |
+
+Die Verbindung lebt jetzt so lange wie die Anwendung; Schema, PRAGMA und
+Spaltenprüfung laufen einmal beim Öffnen. Ein Pfadwechsel schließt die alte und
+öffnet die neue.
+
+**Und die Datenbank ist jetzt verriegelt.** Zwei laufende Kassen auf derselben
+Datei wären ernst — doppelte Belegnummern, konkurrierende Sequenzen, zwei
+Hälften einer Hash-Kette. SQLite hätte das anstandslos zugelassen; das Problem
+bestand vorher auch, nur unsichtbar. Die zweite Kasse bekommt jetzt eine
+Meldung im Klartext statt eines kaputten Logs.
+
 > **Entwicklungswerkzeug.** Bei einem Kunden wäre das Verhaltens- und
 > Leistungskontrolle: Rechtsgrundlage nach DSGVO, Mitbestimmung nach
 > § 87 Abs. 1 Nr. 6 BetrVG. Nie ohne ausdrückliche Einwilligung des Betriebs
@@ -265,7 +293,10 @@ Jedes Ereignis wird geschrieben, **wenn es passiert** — `SaleStarted` beim
 beim Abschluss: ein Log, der erst am Ende schreibt, ist kein append-only-Log.
 Bis dahin liegt der ganze Vorgang im Arbeitsspeicher, und ein Absturz nimmt ihn
 spurlos mit. Der Preis ist gemessen: im M0-Lasttest kosteten einzeln
-geschriebene Ereignisse unter Stoßlast **p99 1,4 ms**.
+geschriebene Ereignisse unter Stoßlast **p99 1,4 ms** — gemessen mit einer
+**bestehenden** Verbindung, ohne IPC. Die Bedingung gehört zur Zahl: solange
+der Rust-Teil bei jedem Aufruf eine neue Verbindung öffnete, waren es 110 ms.
+Siehe unten, „Was der Diagnose-Modus gefunden hat".
 
 Daraus folgt dreierlei:
 

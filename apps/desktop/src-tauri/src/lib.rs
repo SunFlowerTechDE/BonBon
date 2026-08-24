@@ -88,8 +88,64 @@ struct VerkettetesEreignis {
     sale_id: Option<String>,
 }
 
-fn oeffne(pfad: &str) -> Result<Connection, String> {
-    let verbindung = Connection::open(pfad).map_err(|e| format!("Datenbank {pfad}: {e}"))?;
+/// Die offene Datenbank — eine je Anwendung, nicht eine je Aufruf.
+///
+/// **Warum das wichtig genug fuer einen globalen Zustand ist.** Vorher rief
+/// jeder Befehl `oeffne()`: neue Verbindung, `PRAGMA journal_mode=WAL`,
+/// `synchronous`, `CREATE TABLE IF NOT EXISTS`, drei Indizes und die
+/// Spaltenpruefung fuer die Migration — pro geschriebenem Ereignis. Der
+/// Diagnose-Modus hat es sichtbar gemacht: 110 ms im Mittel je Schreibvorgang,
+/// bis zu einer Sekunde je Bon.
+struct Datenbank {
+    pfad: String,
+    verbindung: Connection,
+    /// Die Sperrdatei, offen gehalten. Siehe `sperre_nehmen`.
+    _sperre: std::fs::File,
+}
+
+static DATENBANK: std::sync::Mutex<Option<Datenbank>> = std::sync::Mutex::new(None);
+
+/// Nimmt eine ausschliessliche Sperre auf die Datenbank.
+///
+/// **Zwei laufende Kassen auf derselben Datei waeren ernst:** doppelte
+/// Belegnummern, konkurrierende Sequenznummern, zwei Haelften einer Hash-Kette.
+/// SQLite selbst erlaubt mehrere Verbindungen und wuerde das anstandslos
+/// zulassen. Das Problem besteht heute schon, nur unsichtbar — die dauerhafte
+/// Verbindung ist der richtige Ort, es abzufangen.
+///
+/// Umgesetzt ueber eine Nebendatei, die ohne Freigabe zum Teilen geoeffnet und
+/// fuer die Lebensdauer offen gehalten wird. Zwei Vorteile gegenueber
+/// `PRAGMA locking_mode = EXCLUSIVE`: Lesewerkzeuge (Pruefskripte,
+/// Sicherungen) bleiben moeglich, und eine abgestuerzte Kasse hinterlaesst
+/// keine haengende Sperre — Windows schliesst das Handle mit dem Prozess.
+///
+/// Die Datei bleibt liegen, das schadet nicht: gesperrt ist sie nur, solange
+/// jemand sie offen haelt.
+fn sperre_nehmen(pfad: &str) -> Result<std::fs::File, String> {
+    let sperrpfad = format!("{pfad}.lock");
+    let mut optionen = std::fs::OpenOptions::new();
+    optionen.create(true).truncate(true).write(true);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // share_mode(0): kein anderer Prozess darf die Datei oeffnen.
+        optionen.share_mode(0);
+    }
+
+    optionen.open(&sperrpfad).map_err(|e| {
+        format!(
+            "Die Datenbank {pfad} wird bereits von einer anderen Kasse benutzt \
+             ({sperrpfad}: {e}). Zwei Kassen auf derselben Datei wuerden \
+             Belegnummern doppelt vergeben und die Hash-Kette zerreissen. \
+             Beende die andere Kasse oder gib in bonbon.config.json einen \
+             eigenen Pfad an."
+        )
+    })
+}
+
+/// Legt Schema, Einstellungen und Migration an — **einmal je Verbindung**.
+fn richte_ein(verbindung: &Connection) -> Result<(), String> {
     // WAL und synchronous NORMAL — dieselben Einstellungen wie im M0-Lasttest.
     verbindung
         .pragma_update(None, "journal_mode", "WAL")
@@ -141,8 +197,53 @@ fn oeffne(pfad: &str) -> Result<Connection, String> {
             )
             .map_err(|e| format!("Spalte sale_id nicht ergaenzbar: {e}"))?;
     }
+    Ok(())
+}
 
-    Ok(verbindung)
+/// Fuehrt Arbeit auf der offenen Datenbank aus.
+///
+/// Oeffnet sie beim ersten Aufruf. Ein **Pfadwechsel** — selten, aber moeglich,
+/// wenn jemand die Konfiguration aendert — schliesst die alte und oeffnet die
+/// neue; die Sperre wandert mit.
+///
+/// Die Lebensdauer ist die der Anwendung. Geschlossen wird beim Beenden
+/// (`aufraeumen`), und selbst wenn das ausfaellt, gibt das Betriebssystem
+/// Handle und Sperre mit dem Prozess frei.
+fn mit_datenbank<T>(
+    pfad: &str,
+    arbeit: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut halter = DATENBANK
+        .lock()
+        .map_err(|e| format!("Datenbanksperre nicht zu nehmen: {e}"))?;
+
+    let passt = halter.as_ref().is_some_and(|d| d.pfad == pfad);
+    if !passt {
+        // Erst die alte fallenlassen, dann die neue oeffnen: sonst haelt die
+        // alte Sperre die neue auf, wenn es derselbe Pfad in anderer
+        // Schreibweise ist.
+        *halter = None;
+        let sperre = sperre_nehmen(pfad)?;
+        let verbindung = Connection::open(pfad).map_err(|e| format!("Datenbank {pfad}: {e}"))?;
+        richte_ein(&verbindung)?;
+        *halter = Some(Datenbank {
+            pfad: pfad.to_string(),
+            verbindung,
+            _sperre: sperre,
+        });
+    }
+
+    let datenbank = halter
+        .as_ref()
+        .ok_or_else(|| "Datenbank nicht geoeffnet".to_string())?;
+    arbeit(&datenbank.verbindung)
+}
+
+/// Schliesst die Datenbank. Beim Beenden der Anwendung aufgerufen.
+fn aufraeumen() {
+    if let Ok(mut halter) = DATENBANK.lock() {
+        *halter = None;
+    }
 }
 
 /// Die Hash-Eingabe, längenpräfigiert — Byte für Byte dieselbe Bildung wie in
@@ -195,8 +296,7 @@ fn eventlog_anhaengen(
     id: String,
     sale_id: Option<String>,
 ) -> Result<VerkettetesEreignis, String> {
-    let verbindung = oeffne(&pfad)?;
-
+    mit_datenbank(&pfad, |verbindung| {
     let (letzte_seq, letzter_hash): (i64, String) = verbindung
         .query_row(
             "SELECT seq, hash FROM sale_events WHERE device_id = ?1 ORDER BY seq DESC LIMIT 1",
@@ -240,7 +340,8 @@ fn eventlog_anhaengen(
         )
         .map_err(|e| format!("Ereignis nicht schreibbar: {e}"))?;
 
-    Ok(ereignis)
+        Ok(ereignis)
+    })
 }
 
 /// Das zuletzt geschriebene Ereignis eines Typs.
@@ -259,20 +360,21 @@ fn eventlog_letztes_ereignis(
     device_id: String,
     r#type: String,
 ) -> Result<Option<VerkettetesEreignis>, String> {
-    let verbindung = oeffne(&pfad)?;
-    let ergebnis = verbindung.query_row(
-        "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
-           FROM sale_events
-          WHERE device_id = ?1 AND type = ?2
-          ORDER BY seq DESC LIMIT 1",
-        rusqlite::params![device_id, r#type],
-        lies_ereignis,
-    );
-    match ergebnis {
-        Ok(e) => Ok(Some(e)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(format!("Letztes Ereignis nicht lesbar: {e}")),
-    }
+    mit_datenbank(&pfad, |verbindung| {
+        let ergebnis = verbindung.query_row(
+            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
+               FROM sale_events
+              WHERE device_id = ?1 AND type = ?2
+              ORDER BY seq DESC LIMIT 1",
+            rusqlite::params![device_id, r#type],
+            lies_ereignis,
+        );
+        match ergebnis {
+            Ok(e) => Ok(Some(e)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Letztes Ereignis nicht lesbar: {e}")),
+        }
+    })
 }
 
 /// Alle Ereignisse eines Bons, aufsteigend.
@@ -282,23 +384,24 @@ fn eventlog_ereignisse_zu_beleg(
     device_id: String,
     sale_id: String,
 ) -> Result<Vec<VerkettetesEreignis>, String> {
-    let verbindung = oeffne(&pfad)?;
-    let mut abfrage = verbindung
-        .prepare(
-            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
-               FROM sale_events
-              WHERE device_id = ?1 AND sale_id = ?2
-              ORDER BY seq",
-        )
-        .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
-    // Erst binden, dann zurueckgeben: sonst lebt die Abfrage laenger als die
-    // Verbindung, die sie ausleiht.
-    let zeilen = abfrage
-        .query_map(rusqlite::params![device_id, sale_id], lies_ereignis)
-        .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
-    Ok(zeilen)
+    mit_datenbank(&pfad, |verbindung| {
+        let mut abfrage = verbindung
+            .prepare(
+                "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash, sale_id
+                   FROM sale_events
+                  WHERE device_id = ?1 AND sale_id = ?2
+                  ORDER BY seq",
+            )
+            .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
+        // Erst binden, dann zurueckgeben: sonst lebt die Abfrage laenger als die
+        // Verbindung, die sie ausleiht.
+        let zeilen = abfrage
+            .query_map(rusqlite::params![device_id, sale_id], lies_ereignis)
+            .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
+        Ok(zeilen)
+    })
 }
 
 /// Belege, die bestimmte Ereignistypen haben — und andere nicht.
@@ -321,53 +424,55 @@ fn eventlog_belege(
     enthaelt: Vec<String>,
     enthaelt_nicht: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let verbindung = oeffne(&pfad)?;
+    mit_datenbank(&pfad, |verbindung| {
 
-    // Platzhalter fuer beide Listen. Eine leere Liste ergibt eine Summe von 0
-    // und damit die jeweils neutrale Bedingung.
-    let platzhalter = |anzahl: usize, ab: usize| -> String {
-        (0..anzahl)
-            .map(|i| format!("?{}", ab + i))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let hat = platzhalter(enthaelt.len(), 2);
-    let hat_nicht = platzhalter(enthaelt_nicht.len(), 2 + enthaelt.len());
+        // Platzhalter fuer beide Listen. Eine leere Liste ergibt eine Summe von 0
+        // und damit die jeweils neutrale Bedingung.
+        let platzhalter = |anzahl: usize, ab: usize| -> String {
+            (0..anzahl)
+                .map(|i| format!("?{}", ab + i))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let hat = platzhalter(enthaelt.len(), 2);
+        let hat_nicht = platzhalter(enthaelt_nicht.len(), 2 + enthaelt.len());
 
-    let sql = format!(
-        "SELECT sale_id FROM sale_events
-          WHERE device_id = ?1 AND sale_id IS NOT NULL
-          GROUP BY sale_id
-         HAVING SUM(CASE WHEN type IN ({}) THEN 1 ELSE 0 END) {}
-            AND SUM(CASE WHEN type IN ({}) THEN 1 ELSE 0 END) = 0
-          ORDER BY MIN(seq)",
-        if hat.is_empty() { "NULL".to_string() } else { hat },
-        if enthaelt.is_empty() { ">= 0" } else { "> 0" },
-        if hat_nicht.is_empty() { "NULL".to_string() } else { hat_nicht },
-    );
+        let sql = format!(
+            "SELECT sale_id FROM sale_events
+              WHERE device_id = ?1 AND sale_id IS NOT NULL
+              GROUP BY sale_id
+             HAVING SUM(CASE WHEN type IN ({}) THEN 1 ELSE 0 END) {}
+                AND SUM(CASE WHEN type IN ({}) THEN 1 ELSE 0 END) = 0
+              ORDER BY MIN(seq)",
+            if hat.is_empty() { "NULL".to_string() } else { hat },
+            if enthaelt.is_empty() { ">= 0" } else { "> 0" },
+            if hat_nicht.is_empty() { "NULL".to_string() } else { hat_nicht },
+        );
 
-    let werte: Vec<&dyn rusqlite::ToSql> = std::iter::once(&device_id as &dyn rusqlite::ToSql)
-        .chain(enthaelt.iter().map(|t| t as &dyn rusqlite::ToSql))
-        .chain(enthaelt_nicht.iter().map(|t| t as &dyn rusqlite::ToSql))
-        .collect();
+        let werte: Vec<&dyn rusqlite::ToSql> = std::iter::once(&device_id as &dyn rusqlite::ToSql)
+            .chain(enthaelt.iter().map(|t| t as &dyn rusqlite::ToSql))
+            .chain(enthaelt_nicht.iter().map(|t| t as &dyn rusqlite::ToSql))
+            .collect();
 
-    let mut abfrage = verbindung
-        .prepare(&sql)
-        .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
-    let belege = abfrage
-        .query_map(werte.as_slice(), |z| z.get::<_, String>(0))
-        .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
-    Ok(belege)
+        let mut abfrage = verbindung
+            .prepare(&sql)
+            .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
+        let belege = abfrage
+            .query_map(werte.as_slice(), |z| z.get::<_, String>(0))
+            .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
+        Ok(belege)
+    })
 }
 
 #[tauri::command]
 fn eventlog_anzahl(pfad: String) -> Result<i64, String> {
-    let verbindung = oeffne(&pfad)?;
-    verbindung
-        .query_row("SELECT COUNT(*) FROM sale_events", [], |z| z.get(0))
-        .map_err(|e| format!("Zählen fehlgeschlagen: {e}"))
+    mit_datenbank(&pfad, |verbindung| {
+        verbindung
+            .query_row("SELECT COUNT(*) FROM sale_events", [], |z| z.get(0))
+            .map_err(|e| format!("Zählen fehlgeschlagen: {e}"))
+    })
 }
 
 // --- Dateien ---------------------------------------------------------------
@@ -464,8 +569,19 @@ macro_rules! befehle {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(befehle!())
-        .run(tauri::generate_context!())
-        .expect("Die Kasse konnte nicht gestartet werden");
+        .build(tauri::generate_context!())
+        .expect("Die Kasse konnte nicht gestartet werden")
+        .run(|_handle, ereignis| {
+            // Beim Beenden die Datenbank schliessen und die Sperre freigeben.
+            //
+            // Faellt das aus — Absturz, Stromausfall —, gibt das Betriebssystem
+            // Handle und Sperre ohnehin mit dem Prozess frei. Die Sperrdatei
+            // bleibt dann liegen, das schadet nicht: gesperrt ist sie nur,
+            // solange jemand sie offen haelt.
+            if matches!(ereignis, tauri::RunEvent::Exit) {
+                aufraeumen();
+            }
+        });
 }
 
 #[cfg(test)]
