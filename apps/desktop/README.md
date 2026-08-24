@@ -243,10 +243,11 @@ nachgestellt wurden.)
 
 #### Woher die Kasse weiß, was offen ist — gemessen, nicht nachgeschlagen
 
-Die Dokumentation legt nahe, die Antwort des Zero-Receipts
-(`0x4445000000000002`) trage einen TSE-Status mit
-`CurrentStartedTransactionNumbers`. **Am laufenden Launcher gemessen stimmt das
-nicht:**
+Eine Runde lang galt: die Antwort des Zero-Receipts (`0x4445000000000002`) trage
+einen TSE-Status mit `CurrentStartedTransactionNumbers`. Die Annahme stammte
+**nicht aus der fiskaltrust-Dokumentation**, sondern aus einer Fehldeutung der
+Launcher-Ausgabe beim Start; eine Websuche schien sie zu bestätigen. **Am
+laufenden Launcher gemessen stimmt sie nicht:**
 
 ```
 pnpm --filter @bonbon/tse-spike exec tsx src/tse-info-probe.ts

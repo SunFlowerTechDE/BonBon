@@ -385,9 +385,10 @@ export class Kasse {
    * Offene TSE-Transaktionen auflösen.
    *
    * **Der Log ist die Quelle, nicht die TSE.** Am laufenden fiskaltrust-Launcher
-   * gemessen: die Antwort auf `start-transaction` enthält genau eine Signatur
-   * und keine Transaktionsnummer, und die Antwort des Zero-Receipts führt keine
-   * offenen Transaktionen auf. Die Middleware ordnet über `cbReceiptReference`
+   * gemessen (`tools/tse-spike/src/tse-info-probe.ts`): die Antwort auf
+   * `start-transaction` enthält genau eine Signatur und keine
+   * Transaktionsnummer, und die Antwort des Zero-Receipts führt keine offenen
+   * Transaktionen auf — anders als eine Runde lang angenommen. Die Middleware ordnet über `cbReceiptReference`
    * zu. Eine Kasse, die sich auf `offeneTransaktionen()` verlässt, hätte an
    * diesem Gerät gar keine Antwort bekommen.
    *

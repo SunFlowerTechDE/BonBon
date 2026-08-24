@@ -3,6 +3,11 @@
 M0-Spike: Kartenzahlung gegen das ZVT-Mock-Terminal auf Port 20007, später
 gegen ein echtes CCV Base Next.
 
+> **Gemessen ist der eigene Mock, kein Terminal.** Und der Mock entstand aus
+> derselben Lesart der Spezifikation wie der Adapter — beide koennen
+> gemeinsam falsch liegen, ohne dass ein Test das zeigt. Ein echtes CCV Base
+> Next wurde nie angefasst. Siehe CLAUDE.md, „Gemessen oder angenommen".
+
 ```
 pnpm zahlung                        3,80 EUR an localhost:20007
 pnpm zahlung -- --betrag 940        anderer Betrag, in Cent

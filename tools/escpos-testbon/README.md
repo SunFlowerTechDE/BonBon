@@ -3,6 +3,13 @@
 M0-Spike: ESC/POS-Testbon gegen escpresso auf TCP 9100, spaeter gegen einen
 echten Epson TM-m30III.
 
+> **Gemessen ist escpresso, nicht der Drucker.** Alles, was hier ueber
+> Zeilenbreite, Codepage und `GS !` steht, ist gegen den Emulator geprueft.
+> Die Angaben aus dem Technical Reference Guide sind nachgeschlagen, aber am
+> Geraet **nicht** nachgemessen — der TM-m30III wurde nie angefasst. Wo
+> Emulator und Handbuch sich widersprachen, steht das unten ausdruecklich da.
+> Siehe CLAUDE.md, „Gemessen oder angenommen".
+
 ```
 pnpm testbon                      an localhost:9100
 pnpm testbon --host 192.168.1.50  an ein echtes Geraet

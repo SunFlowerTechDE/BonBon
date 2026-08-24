@@ -140,12 +140,21 @@ export type Signierergebnis =
  *
  * Nachgeschlagen, nicht geraten:
  *
- * | Hier | fiskaltrust |
- * |---|---|
- * | `beginneTransaktion` | `ftReceiptCase 0x4445000000000008` (Start-Transaction) |
- * | `signiere` | Kassenbeleg, beendet die Transaktion |
- * | `brichTransaktionAb` | `ftReceiptCase 0x444500000000000B` (Fail-Transaction) |
- * | `offeneTransaktionen` | **nicht ueber die POS-Schnittstelle abfragbar** — siehe unten |
+ * | Hier | fiskaltrust | Stand |
+ * |---|---|---|
+ * | `beginneTransaktion` | `ftReceiptCase 0x4445000000000008` (Start-Transaction) | **gemessen** |
+ * | `signiere` | Kassenbeleg, beendet die Transaktion | **angenommen** |
+ * | `brichTransaktionAb` | `ftReceiptCase 0x444500000000000B` (Fail-Transaction) | **gemessen** |
+ * | `offeneTransaktionen` | nicht ueber die POS-Schnittstelle abfragbar | **gemessen** |
+ *
+ * „Gemessen" heisst: mit `tools/tse-spike/src/tse-info-probe.ts` gegen den
+ * laufenden Launcher gesendet und die Antwort angesehen.
+ *
+ * **Was fehlt:** die Kombination, die die Kasse tatsaechlich faehrt — ein
+ * expliziter `start-transaction`, dann ein Abschluss ueber einen Kassenbeleg.
+ * Gelaufen sind bisher nur der implizite Rundlauf (M0) und Start gefolgt von
+ * Fail-Transaction (die Sonde). Das gehoert an den Anfang von M3, bevor der
+ * Adapter darauf gebaut wird.
  *
  * Zum Abbrechen kennt die Middleware zwei Wege. **Explizit** schliesst genau
  * eine Transaktion, referenziert ueber `cbReceiptReference`. **Implizit**
@@ -157,9 +166,11 @@ export type Signierergebnis =
  *
  * ## Was `offeneTransaktionen()` bei fiskaltrust liefern kann — gemessen
  *
- * Die Dokumentation legt nahe, die Antwort des Zero-Receipts trage einen
- * TSE-Status mit `CurrentStartedTransactionNumbers`. **Am laufenden Launcher
- * gemessen stimmt das nicht.** Die Antwort enthaelt 16 Signaturen, von
+ * Eine Runde lang galt, die Antwort des Zero-Receipts trage einen TSE-Status
+ * mit `CurrentStartedTransactionNumbers`. Die Annahme stammte **nicht aus der
+ * fiskaltrust-Dokumentation**, sondern aus einer Fehldeutung der
+ * Launcher-Ausgabe beim Start. **Am laufenden Launcher gemessen stimmt sie
+ * nicht.** Die Antwort enthaelt 16 Signaturen, von
  * `start-transaction-result` bis `<public-key>`; keine davon fuehrt offene
  * Transaktionen auf. Der Journal-Endpunkt beantwortet jeden versuchten
  * `ftJournalType` mit derselben Versionsauskunft.

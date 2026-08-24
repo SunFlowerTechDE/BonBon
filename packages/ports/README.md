@@ -40,12 +40,20 @@ sich der Zustand nicht einmal feststellen.
 
 ### Abbildung auf fiskaltrust (nachgeschlagen, fuer M3)
 
-| Hier | fiskaltrust |
-|---|---|
-| `beginneTransaktion` | `ftReceiptCase 0x4445000000000008` |
-| `signiere` | Kassenbeleg, beendet die Transaktion |
-| `brichTransaktionAb` | `ftReceiptCase 0x444500000000000B` (Fail-Transaction) |
-| `offeneTransaktionen` | Zero-Receipt `0x4445000000000002`; die Antwort traegt `CurrentStartedTransactionNumbers` |
+| Hier | fiskaltrust | Stand |
+|---|---|---|
+| `beginneTransaktion` | `ftReceiptCase 0x4445000000000008` | **gemessen** |
+| `signiere` | Kassenbeleg, beendet die Transaktion | **angenommen** |
+| `brichTransaktionAb` | `ftReceiptCase 0x444500000000000B` (Fail-Transaction) | **gemessen** |
+| `offeneTransaktionen` | nicht ueber die POS-Schnittstelle abfragbar | **gemessen** |
+
+Gemessen heisst: mit `tools/tse-spike/src/tse-info-probe.ts` gegen den laufenden
+Launcher gesendet und die Antwort angesehen.
+
+**Was fehlt:** die Kombination, die die Kasse tatsaechlich faehrt — ein expliziter
+`start-transaction`, dann ein Abschluss ueber einen Kassenbeleg. Gelaufen sind
+bisher nur der implizite Rundlauf (M0) und Start gefolgt von Fail-Transaction.
+Das gehoert an den Anfang von M3.
 
 Zum Abbrechen kennt die Middleware zwei Wege. **Explizit** schliesst genau eine
 Transaktion, referenziert ueber `cbReceiptReference`. **Implizit** schliesst
@@ -55,9 +63,21 @@ mehrere: die Nummern gehen als
 Transaktionen, die nicht von der Middleware geoeffnet wurden — genau die
 entstehen bei einem Absturz.
 
-**Offen fuer M3:** welcher `ftSignatureType` die Nummern in der Antwort des
-Zero-Receipts traegt, ist nicht belegt. Der Adapter sieht das am laufenden
-Launcher nach, statt zu raten.
+### Widerlegte Annahme
+
+Eine Runde lang stand hier, die Antwort des Zero-Receipts `0x4445000000000002`
+trage einen TSE-Status mit `CurrentStartedTransactionNumbers`, und der Adapter
+muesse nur nachsehen, welcher `ftSignatureType` die Nummern fuehrt.
+
+**Das war falsch.** Die Annahme stammte nicht aus der fiskaltrust-Dokumentation,
+sondern aus einer Fehldeutung der Launcher-Ausgabe beim Start; eine Websuche
+schien sie zu bestaetigen. Die Sonde hat sie widerlegt: der Zero-Receipt
+antwortet mit 16 Signaturen, keine davon fuehrt offene Transaktionen auf, und der
+Journal-Endpunkt beantwortet jeden `ftJournalType` mit derselben
+Versionsauskunft.
+
+Der Feldname existiert — aber nur **ausgehend**, im impliziten
+Fail-Transaction-Beleg. Details in CLAUDE.md, Regel 19.
 
 ## Der MockTse vergisst nichts
 

@@ -2,9 +2,10 @@
  * Messen statt nachschlagen: woher kommen die offenen Transaktionsnummern?
  *
  * `TsePort.offeneTransaktionen()` braucht sie, um nach einem Absturz verwaiste
- * TSE-Transaktionen aufzuloesen. Die Dokumentation legt nahe, die Antwort des
+ * TSE-Transaktionen aufzuloesen. Eine Runde lang galt, die Antwort des
  * Zero-Receipts (`0x4445000000000002`) trage einen TSE-Status mit
- * `CurrentStartedTransactionNumbers`.
+ * `CurrentStartedTransactionNumbers` — eine Fehldeutung der Launcher-Ausgabe
+ * beim Start, nicht eine Angabe aus der Dokumentation.
  *
  * **Gemessen stimmt das nicht.** Die Antwort enthaelt 16 Signaturen — von
  * `start-transaction-result` bis `<public-key>` —, aber keine fuehrt offene

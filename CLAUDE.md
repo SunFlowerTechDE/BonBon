@@ -14,9 +14,9 @@ Kassensoftware (POS) für kleine gastronomische Betriebe in Deutschland — Caf�
 | Domänenkern | **`@bonbon/core`** — reines TypeScript, plattformfrei, läuft identisch im Client und im Backend |
 | Lokale Daten | **SQLite** im WAL-Modus, Event Log mit hoher Schreiblast |
 | Backend | **Node/TypeScript, Fastify, PostgreSQL**, Hosting in DE/EU |
-| Fiskalisierung | **fiskaltrust Middleware** über den lokalen Launcher (HTTP/gRPC auf localhost), alternativ fiskaly SIGN DE V2 |
-| Drucker | **ESC/POS über TCP Port 9100** (Epson TM-m30III) |
-| Kartenzahlung | **ZVT über TCP Port 20007** (Desktop), später Payment-SDKs (Mobile) |
+| Fiskalisierung | **fiskaltrust Middleware** über den lokalen Launcher (HTTP/gRPC auf localhost), alternativ fiskaly SIGN DE V2 (*angenommen*, nie angefasst) |
+| Drucker | **ESC/POS über TCP Port 9100** (Epson TM-m30III — *angenommen*, gemessen ist escpresso) |
+| Kartenzahlung | **ZVT über TCP Port 20007** (Desktop — *angenommen*, gemessen ist der eigene Mock), später Payment-SDKs (Mobile) |
 
 **Warum Tauri und nicht Flutter:** Der Domänenkern muss TypeScript bleiben, weil er **identisch im Client und im Backend** laufen soll. Steuer- und Rundungslogik zweimal zu implementieren ist der teuerste denkbare Fehler in diesem Produkt.
 
@@ -376,9 +376,9 @@ Der Preis ist gemessen und tragbar: im M0-Lasttest kosteten einzeln geschriebene
 
 Die Transaktion wird beim **Bonbeginn** geöffnet, nicht beim Abschluss — die KassenSichV verlangt die Protokollierung mit Beginn des Aufzeichnungsvorgangs. Daraus folgt ein Zustand, den es vorher nicht gab: eine Transaktion, die begonnen wurde und nie endete.
 
-**Die Quelle dafür ist der Event Log, nicht die TSE.** Am laufenden fiskaltrust-Launcher gemessen: die Antwort auf `start-transaction` enthält genau eine Signatur und **keine Transaktionsnummer**, und die Antwort des Zero-Receipts führt keine offenen Transaktionen auf. `CurrentStartedTransactionNumbers` ist ein *ausgehendes* Feld für den impliziten Fail-Transaction-Beleg, kein Abfrageweg — die Middleware ordnet über `cbReceiptReference` zu.
+**Die Quelle für „was steht offen" ist der Event Log, nicht die TSE.** Die Kasse schreibt `TseTransaktionBegonnen`, sobald sie eine Transaktion öffnet, und weiß daraus selbst, was offen steht. Eine Abfrage an die TSE bleibt **Zweitquelle** — für Reste, die nicht von dieser Kasse stammen, und für Geräte, die die Frage überhaupt beantworten können.
 
-Die Kasse hält deshalb selbst fest, wann sie eine Transaktion geöffnet hat, und weiß daraus, was offen steht. Eine Abfrage an die TSE bleibt zweite Quelle für Reste, die nicht von dieser Kasse stammen. Jede offene Transaktion wird gegen den Event Log abgeglichen:
+Jede offene Transaktion wird gegen den Event Log abgeglichen, nachgeschlagen über die **Belegreferenz**:
 
 | Log | Was passiert |
 |---|---|
@@ -387,7 +387,29 @@ Die Kasse hält deshalb selbst fest, wann sie eine Transaktion geöffnet hat, un
 
 **Der Vorgang wird protokolliert, nicht stillschweigend bereinigt** — er geht als eigenes Ereignis in den Log. Festgehalten wird nur der **Erfolg**: ein gescheiterter Versuch bekommt kein Ereignis, sonst gälte die Transaktion beim nächsten Start als erledigt und bliebe für immer offen. Eine offene Transaktion klammheimlich zu schließen wäre die stille Änderung aus Regel 1.
 
-Antwortet die TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8). Der Abgleich wird beim nächsten Start nachgeholt, und der Aufschub wird gemeldet.
+Antwortet die TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8). Der Log wird trotzdem abgeglichen; was an der TSE hängt, wird beim nächsten Start nachgeholt und der Aufschub gemeldet.
+
+#### Widerlegte Annahme: `CurrentStartedTransactionNumbers` ist kein Abfrageweg
+
+Hier stand bis zum 24. August 2026 das Gegenteil: die Kasse solle beim Start die TSE nach offenen Transaktionen fragen, der Launcher liefere dafür das Feld `CurrentStartedTransactionNumbers` — in der Antwort des Zero-Receipts `0x4445000000000002`.
+
+**Das stimmt nicht.** Der Absatz steht hier, damit die Korrektur nicht in vier Monaten von jemandem zurückgedreht wird, der die alte Fassung für die durchdachtere hält.
+
+**Woher die Annahme kam.** Sie stammte nicht aus der fiskaltrust-Dokumentation, sondern aus einer Fehldeutung der Launcher-Ausgabe beim Start: dort taucht der Feldname auf, und er wurde als Abfrageweg gelesen. Eine Websuche schien das zu bestätigen — die Trefferzusammenfassung behauptete, die Antwort des Zero-Receipts trage einen TSE-Status mit diesem Feld. Die Dokumentation selbst beschreibt das Feld ausschließlich als **ausgehend**.
+
+**Wie es festgestellt wurde.** Gemessen mit [`tools/tse-spike/src/tse-info-probe.ts`](tools/tse-spike/src/tse-info-probe.ts) gegen den laufenden Launcher. Drei Befunde:
+
+- Der **Zero-Receipt** antwortet mit 16 Signaturen, von `start-transaction-result` bis `<public-key>`. **Keine** davon führt offene Transaktionen auf; der Feldname kommt in der Antwort nicht vor.
+- Der **Journal-Endpunkt** beantwortet jeden versuchten `ftJournalType` mit derselben Versionsauskunft (243 Zeichen). Es gibt dort keinen TSE-Status.
+- Die Antwort auf **`start-transaction`** enthält genau **eine** Signatur (`start-transaction-signature`) und **keine Transaktionsnummer**. Die Kasse erfährt beim Öffnen also nicht einmal, welche Nummer ihre Transaktion bekommen hat.
+
+**Was tatsächlich gilt.** `CurrentStartedTransactionNumbers` ist ein **ausgehendes** Feld: es geht im `ftReceiptCaseData` eines **impliziten** Fail-Transaction-Belegs mit, um Transaktionen zu schließen, die die Middleware nicht kennt (`cbReceiptReference` muss dann leer sein). Im Normalfall ordnet die Middleware über `cbReceiptReference` zu — der **explizite** Fail-Transaction-Beleg braucht deshalb nur die Belegreferenz, keine Nummer.
+
+**Das ist keine geänderte Schnittstelle, sondern eine widerlegte Annahme.** Der Launcher hat sich nicht geändert; er wurde vorher nur nicht gefragt. Wer die Regel wieder umdrehen will, muss vorher messen — die Sonde liegt dafür bereit:
+
+```
+pnpm --filter @bonbon/tse-spike exec tsx src/tse-info-probe.ts
+```
 
 ### Mocks führen ihren Zustand fort
 
@@ -466,14 +488,60 @@ Alles, was Geld kostet oder Hardware braucht, liegt hinter einem schmalen Interf
 
 | Port | Mock | Echt |
 |---|---|---|
-| `TsePort` | `MockTse` — lokale Fantasiesignaturen, Ausfall auf Knopfdruck | fiskaltrust Launcher (localhost) bzw. fiskaly, später Swissbit |
-| `PrinterPort` | escpresso auf `localhost:9100` | Epson TM-m30III, gleiche IP-Logik |
+| `TsePort` | `MockTse` — lokale Fantasiesignaturen, Ausfall auf Knopfdruck | fiskaltrust Launcher (localhost) · fiskaly und Swissbit *angenommen* |
+| `PrinterPort` | escpresso auf `localhost:9100` | Epson TM-m30III — *angenommen*, die gleiche IP-Logik ist ungeprüft |
 | `CashDrawerPort` | Log-Zeile plus Symbol in der UI | `ESC p` über den Drucker |
-| `PaymentPort` | `MockTerminal` auf `localhost:20007` | CCV Base Next über ZVT |
+| `PaymentPort` | `MockTerminal` auf `localhost:20007` | CCV Base Next über ZVT — *angenommen*, nie angefasst |
 
 **Jeder Mock muss kaputtgehen können.** Ein Mock, der immer funktioniert, testet nur den Schönwetterfall — und der Ausfallpfad ist bei einer Kasse der rechtlich heikelste Teil. Jeder Mock braucht Schalter für Timeout, Ablehnung und Totalausfall.
 
 **Mocks sind Produktionscode**, kein Wegwerfzeug. Sie bleiben dauerhaft in der Testsuite.
+
+---
+
+## Gemessen oder angenommen
+
+Dieses Verzeichnis existiert, weil eine falsche Annahme in diesem Dokument teurer ist als anderswo: was hier steht, steht mit Autorität, und in vier Monaten baut jemand darauf. Regel 19 trägt dafür ein ausformuliertes Beispiel — `CurrentStartedTransactionNumbers` galt eine Runde lang als Abfrageweg, bis jemand gemessen hat.
+
+**Angenommen heißt nicht falsch.** Es heißt: nicht überprüft. Wer darauf baut, misst vorher.
+
+### Gemessen
+
+| Was | Wie |
+|---|---|
+| fiskaltrust-Rundlauf, `ftState`-Flags, Signaturdaten | `tools/tse-spike`, gegen den laufenden Launcher (Sandbox, InMemory-TSE) |
+| TSE-Zeitstempel taugen nicht für Reihenfolge oder Dauer | zwei Läufe im M0-Spike, mit entgegengesetztem Ergebnis (Regel 11) |
+| TSE-Seriennummer wechselt beim Neustart des Launchers | M0-Spike |
+| `CurrentStartedTransactionNumbers` ist kein Abfrageweg | `tools/tse-spike/src/tse-info-probe.ts` (Regel 19) |
+| Start-Transaction liefert keine Transaktionsnummer | dieselbe Sonde |
+| Fail-Transaction über `cbReceiptReference` schließt eine offene Transaktion | dieselbe Sonde, mit anschließender Kontrolle des `ftState` |
+| ESC/POS-Bon, Zeilenbreite, Umlaute, `GS !`-Verhalten | escpresso, byteweise gegen `testbon-referenz.bin` |
+| ZVT-Ablauf inklusive `unknown` und Storno | eigener Mock auf Port 20007 (M0) |
+| SQLite-Event-Log unter Last, Absturzsicherheit, p99 1,4 ms je Ereignis | `tools/eventlog-bench` |
+| Der Rust-Weg der Tauri-App | `apps/desktop/src-tauri/src/pfadtests.rs` über die echte IPC-Brücke |
+| Ein Verkauf durch die gebaute Anwendung | `werkzeuge/verkauf-im-fenster.mjs` gegen die Release-Exe |
+| Steuersätze der Beispielartikel | nachgeschlagen mit Fundstelle (Regel 20) — **Vorbelegung, keine Auskunft** |
+
+### Angenommen
+
+| Was | Warum es offen ist |
+|---|---|
+| **Epson TM-m30III** | Nie angefasst. Alles, was über ESC/POS gesagt wird, ist gegen **escpresso** gemessen — Codepage WPC1252, 48 Zeichen je Zeile, `GS !` mit vertauschten Nibbles, `ESC p` für die Lade. Ein echtes Gerät kann in jedem dieser Punkte abweichen; „gleiche IP-Logik" ist eine Vermutung, kein Befund. |
+| **CCV Base Next** | Nie angefasst. Der ZVT-Ablauf ist gegen den **selbst geschriebenen** Mock gemessen, und der kann nur so richtig sein wie die Lesart der Spezifikation, aus der er entstand. Zirkelschluss-Gefahr: Mock und Adapter stammen aus derselben Quelle. |
+| **ZVT-Revision** | Der Mock folgt Revision 13.09. Ob 13.13 abweicht, ist ungeprüft (offener Punkt aus M0). |
+| **fiskaly SIGN DE V2, Swissbit** | Nie angefasst. Beide stehen als Alternative in der Tabelle, weil der Port sie tragen soll — nicht, weil es probiert wurde. |
+| **Expliziter Start gefolgt von einem Kassenbeleg** | Gemessen sind: impliziter Rundlauf (M0) und Start gefolgt von Fail-Transaction (Sonde). Die Kombination, die die Kasse tatsächlich fährt — `start-transaction`, dann Abschluss über einen Kassenbeleg — ist **nie gelaufen**. Das gehört an den Anfang von M3. |
+| **Systemanforderung Windows 10 64-bit, 4 GB RAM** | Aus den Anforderungen der Bausteine abgeleitet, nicht auf einem solchen Gerät ausprobiert. |
+| **`offlineInstaller` für WebView2** | Eine Entscheidung, keine Messung — der Installer wurde noch auf keinem frischen Rechner ausgeführt. |
+| **`synchronous NORMAL` gegen `FULL`** | Offener Punkt aus M0, siehe `tools/eventlog-bench/README.md`. |
+| **Zeitliche Änderung der Steuersätze** | Der Parameter `zeitpunkt` steht in der Signatur, wird aber nicht ausgewertet. Die Vorbelegung bildet nur den Stand ab 1.1.2026 ab. |
+
+### Wie eine Annahme zur Messung wird
+
+Nicht durch eine Websuche. Eine Trefferzusammenfassung hat in Regel 19 die falsche Annahme bestätigt, die die Messung anschließend widerlegte. Eine Annahme wird zur Messung, wenn ein Werkzeug im Repositorium sie gegen das echte Gerät prüft und der Lauf wiederholbar ist.
+
+Wer eine Zeile aus der unteren Tabelle in die obere verschiebt, bringt das Werkzeug mit.
+
 
 ---
 
@@ -514,5 +582,5 @@ Genau zwei Druckermodelle und ein Terminalmodell werden offiziell unterstützt. 
 
 - Zugangsdaten ausschließlich in `.env`, und `.env` steht in `.gitignore` **vor dem ersten Commit**
 - TSE-Zugangsdaten gehören ins Backend bzw. in den Rust-Teil, **niemals ins Web-Bundle** — das kann jeder Kunde auslesen
-- Systemanforderung Desktop: **Windows 10 64-bit, 4 GB RAM**. Windows 7/8.1 wird von keinem Baustein mehr unterstützt
+- Systemanforderung Desktop: **Windows 10 64-bit, 4 GB RAM** (*angenommen* — aus den Anforderungen der Bausteine abgeleitet, nie auf einem solchen Geraet ausprobiert). Windows 7/8.1 wird von keinem Baustein mehr unterstützt
 - Beim Tauri-Windows-Installer `offlineInstaller` oder `fixedVersion` für WebView2 verwenden, nie `downloadBootstrapper` — Einrichtung im Laden passiert oft ohne verlässliches WLAN

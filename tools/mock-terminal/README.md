@@ -208,5 +208,7 @@ tools/zvt-spike          die Kasse, die dagegen zahlt
 ```
 
 Eine zweite Implementierung für ein echtes Terminal ist nicht nötig — dieselbe
-`ZvtPaymentTerminal` spricht mit beiden. Später kommen Payment-SDKs für Mobile
+`ZvtPaymentTerminal` spricht mit beiden. **Das ist eine Annahme**, keine
+Messung: geprüft ist nur die Seite gegen diesen Simulator, und der stammt aus
+derselben Lesart der Spezifikation wie der Adapter. Später kommen Payment-SDKs für Mobile
 daneben, ohne dass sich am Aufrufer etwas ändert.
