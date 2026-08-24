@@ -253,9 +253,105 @@ const BON_OEFFNEN = `(async () => {
   }
 })()`
 
+/**
+ * Zwei Latte Macchiato, einer bleibt hier, einer geht.
+ *
+ * Der Fall, fuer den der Umschalter je Zeile da ist. Er ist zugleich der
+ * einzige im Sortiment, bei dem die Verzehrart seit dem 1.1.2026 den
+ * Steuersatz noch bewegt — Speisen sind in beiden Faellen ermaessigt.
+ */
+const GETEILTE_ZEILE = `(async () => {
+  const warte = (ms) => new Promise((r) => setTimeout(r, ms))
+  const suche = (auswahl, text) =>
+    [...document.querySelectorAll(auswahl)].find((e) => e.textContent.includes(text))
+  const protokoll = []
+
+  const latte = suche('.artikel-kachel', 'Latte Macchiato')
+  if (!latte) throw new Error('Latte Macchiato nicht gefunden')
+  latte.click(); await warte(200)
+  latte.click(); await warte(300)
+  protokoll.push('Zeilen nach zwei Tipps: ' + document.querySelectorAll('.bonzeilen li').length)
+
+  const vorher = document.querySelectorAll('.bonzeilen li').length
+  const umschalter = document.querySelector('.bonzeilen li .zeilen-verzehrart')
+  if (!umschalter) throw new Error('Kein Umschalter an der Bonzeile')
+  umschalter.click()
+
+  // Auf die Aufspaltung warten, statt eine Frist zu raten. Ein fester
+  // Zeitwert hat hier schon einmal einen Zustand von vor dem Klick
+  // ausgewertet — und das sah aus wie ein Fehler in der Anwendung.
+  for (let i = 0; i < 100; i++) {
+    if (document.querySelectorAll('.bonzeilen li').length !== vorher) break
+    await warte(50)
+  }
+  if (document.querySelectorAll('.bonzeilen li').length === vorher) {
+    throw new Error('Die Zeile hat sich nach 5 Sekunden nicht aufgespalten')
+  }
+
+  const zeilen = [...document.querySelectorAll('.bonzeilen li')].map((li) => ({
+    text: li.textContent,
+    einzeln: li.classList.contains('einzeln'),
+  }))
+  protokoll.push('Zeilen nach dem Umschalten: ' + zeilen.length)
+  for (const z of zeilen) protokoll.push('  ' + (z.einzeln ? '[einzeln] ' : '          ') + z.text)
+  protokoll.push('Steuerausweis: ' + (document.querySelector('.steuern')?.textContent ?? '-'))
+  protokoll.push('Legende sichtbar: ' + Boolean(document.querySelector('.legende')))
+  protokoll.push('Hinweis: ' + (document.querySelector('.steuerhinweis')?.textContent ?? '(fehlt)'))
+
+  await klickeZahlen()
+  async function klickeZahlen() {
+    document.querySelector('.zahlen')?.click()
+    await warte(300)
+    const passend = suche('.schnellbetraege button', 'passend')
+    if (!passend) throw new Error('Kein passender Betrag angeboten')
+    passend.click(); await warte(200)
+    document.querySelector('.dialog-knoepfe .bar')?.click()
+    for (let i = 0; i < 100; i++) {
+      if (document.querySelector('.abschluss')) break
+      await warte(100)
+    }
+  }
+
+  const abschluss = document.querySelector('.abschluss')
+  if (!abschluss) throw new Error('Kein Abschluss')
+  return {
+    protokoll,
+    abschluss: abschluss.textContent,
+    fehler: document.querySelector('.fehler')?.textContent ?? null,
+    darstellung: {},
+    fuss: (document.querySelector('.fuss')?.textContent ?? '').slice(0, 4000),
+  }
+})()`
+
+/**
+ * Sorgt dafuer, dass keine Vorgaengerinstanz mehr am Debug-Port haengt.
+ *
+ * Ohne das haengt sich der naechste Lauf an das **alte** Fenster: die neue
+ * Instanz bekommt den Port nicht, `/json/list` antwortet aber trotzdem — vom
+ * Vorgaenger. Das Ergebnis sind Laeufe, die einander widersprechen, weil sie
+ * verschiedene Fenster bedient haben. Genau so ist hier einmal ein Verkauf
+ * ausgewertet worden, der aus dem Lauf davor stammte.
+ */
+async function stelleSicherDassNichtsLaeuft() {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/im', 'bonbon-kasse.exe', '/T', '/F'], { stdio: 'ignore' })
+  }
+  const bis = Date.now() + 15_000
+  while (Date.now() < bis) {
+    try {
+      await fetch(`http://127.0.0.1:${PORT}/json/version`)
+    } catch {
+      return // Niemand antwortet mehr — der Port ist frei.
+    }
+    await warte(250)
+  }
+  throw new Error(`Am Port ${PORT} antwortet weiterhin jemand — alte Instanz nicht beendet.`)
+}
+
 async function main() {
   const argumente = process.argv.slice(2)
   const absturz = argumente.includes('--absturz')
+  const geteilt = argumente.includes('--geteilt')
   const pfad = argumente.find((a) => !a.startsWith('--'))
   const exe = pfad ? resolve(pfad) : STANDARD_EXE
   if (!existsSync(exe)) {
@@ -264,6 +360,7 @@ async function main() {
     process.exit(1)
   }
 
+  await stelleSicherDassNichtsLaeuft()
   console.log(`Starte ${exe}`)
   const anwendung = spawn(exe, [], {
     env: {
@@ -291,7 +388,7 @@ async function main() {
       await warte(100)
     }
 
-    const ergebnis = await steuerung.werteAus(absturz ? BON_OEFFNEN : VERKAUF)
+    const ergebnis = await steuerung.werteAus(absturz ? BON_OEFFNEN : geteilt ? GETEILTE_ZEILE : VERKAUF)
 
     console.log('\n--- Verkauf ---')
     for (const zeile of ergebnis.protokoll) console.log('  ' + zeile)

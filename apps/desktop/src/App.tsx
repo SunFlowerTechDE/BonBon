@@ -37,7 +37,7 @@ import {
 import { TSE_ANZEIGE, type TseAnzeigeStatus } from './farben.js'
 import { type Abschlussergebnis, Kasse, schnellbetraege } from './kasse.js'
 import { type Konfiguration, ladeKonfiguration, laeuftInTauri } from './konfiguration.js'
-import { ARTIKEL, WARENGRUPPEN, type Warengruppe } from './stammdaten.js'
+import { ARTIKEL, STEUERHINWEIS, WARENGRUPPEN, type Warengruppe } from './stammdaten.js'
 
 type Ansicht = 'raster' | 'zahlung'
 
@@ -242,9 +242,46 @@ export function App(): JSX.Element {
           ) : (
             <ul className="bonzeilen">
               {zeilen.map((z) => (
-                <li key={z.lineId}>
+                <li
+                  key={z.lineId}
+                  className={z.verzehrartQuelle === 'position' ? 'einzeln' : undefined}
+                >
                   <span className="menge">{z.menge} ×</span>
                   <span className="bez">{z.bezeichnung}</span>
+                  {/*
+                    Der kleine Umschalter je Zeile. Ein Tipp bewegt ein Stueck
+                    in die andere Verzehrart und spaltet die Zeile dabei auf —
+                    „zwei Cappuccino, einer bleibt hier, einer geht".
+                  */}
+                  <button
+                    type="button"
+                    className={
+                      'zeilen-verzehrart' + (z.verzehrartQuelle === 'position' ? ' gesetzt' : '')
+                    }
+                    title={
+                      (z.verzehrartQuelle === 'position'
+                        ? 'Einzeln gesetzt: ' + verzehrartText(z.verzehrart)
+                        : 'Vom Bon: ' + verzehrartText(z.verzehrart)) +
+                      ' — tippen, um ein Stueck auf ' +
+                      verzehrartText(andereVerzehrart(z.verzehrart)) +
+                      ' zu setzen. ' +
+                      z.steuerbegruendung
+                    }
+                    onClick={() => {
+                      if (kasse !== undefined) {
+                        void sicher(async () => {
+                          setBon(
+                            await kasse.setzeVerzehrartFuerPosition(
+                              z.lineId,
+                              andereVerzehrart(z.verzehrart),
+                            ),
+                          )
+                        })
+                      }
+                    }}
+                  >
+                    {z.verzehrart === 'im-haus' ? 'Hier' : 'Mit'}
+                  </button>
                   <span className="kennz">{steuerKennzeichen(z.steuersatzPromille)}</span>
                   <span className="betrag">{euroText(bonZeilensumme(z))}</span>
                   <button
@@ -281,6 +318,20 @@ export function App(): JSX.Element {
                 ))}
               </tbody>
             </table>
+          )}
+
+          {/*
+            Sichtbar, nicht in den Einstellungen versteckt: die Vorbelegung
+            wirkt sonst wie eine Auskunft, und eine Auskunft dazu darf diese
+            Software nicht geben (§ 5 StBerG, Regel 20).
+          */}
+          <p className="steuerhinweis">{STEUERHINWEIS}</p>
+
+          {zeilen.some((z) => z.verzehrartQuelle === 'position') && (
+            <p className="legende">
+              <span className="marke" aria-hidden="true" /> einzeln gesetzt — der große
+              Umschalter ändert diese Zeilen nicht.
+            </p>
           )}
 
           <div className="summe">
@@ -340,6 +391,15 @@ export function App(): JSX.Element {
       </footer>
     </div>
   )
+}
+
+/** „Hier essen" / „Mitnehmen" ausgeschrieben. */
+function verzehrartText(v: Verzehrart): string {
+  return v === 'im-haus' ? 'Hier essen' : 'Mitnehmen'
+}
+
+function andereVerzehrart(v: Verzehrart): Verzehrart {
+  return v === 'im-haus' ? 'ausser-haus' : 'im-haus'
 }
 
 // --- Bausteine -------------------------------------------------------------

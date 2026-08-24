@@ -43,7 +43,25 @@ export type Steuersatzregel = (
   artikelId: string,
   verzehrart: Verzehrart,
   zeitpunkt: IsoTimestamp,
-) => SteuersatzPromille
+) => Steuerentscheidung
+
+/**
+ * Ein Steuersatz **mit Begruendung**.
+ *
+ * Bei einer Pruefung lautet die Frage nicht „welcher Satz", sondern „warum
+ * dieser Satz". Die Antwort muss aus den Daten kommen und nicht aus der
+ * Erinnerung dessen, der die Kasse eingerichtet hat. Deshalb wandert die
+ * Begruendung mit in den Log — an jeder Position und bei jedem Wechsel der
+ * Verzehrart.
+ *
+ * `fundstelle` nennt die Rechtsgrundlage, `begruendung` sagt in einem Satz,
+ * warum sie auf **dieses** Produkt zutrifft.
+ */
+export interface Steuerentscheidung {
+  readonly satz: SteuersatzPromille
+  readonly begruendung: string
+  readonly fundstelle: string
+}
 
 export interface SaleStarted {
   readonly type: 'SaleStarted'
@@ -66,6 +84,10 @@ export interface LineAdded {
   readonly menge: number
   readonly einzelpreis: Cents
   readonly steuersatzPromille: SteuersatzPromille
+  /** Warum dieser Satz — die Antwort auf „warum 7 %" (Regel 4). */
+  readonly steuerbegruendung: string
+  /** Die Rechtsgrundlage dazu. */
+  readonly steuerfundstelle: string
   readonly verzehrart: Verzehrart
   /** `'position'`, wenn die Verzehrart von der des Bons abweicht. */
   readonly verzehrartQuelle: VerzehrartQuelle
@@ -114,6 +136,9 @@ export interface DiningModeChanged {
     readonly artikelId: string
     readonly vorherSteuersatzPromille: SteuersatzPromille
     readonly nachherSteuersatzPromille: SteuersatzPromille
+    /** Warum der Satz vorher galt und warum jetzt der andere. */
+    readonly vorherBegruendung: string
+    readonly nachherBegruendung: string
   }[]
   /**
    * Zeilen, deren Verzehrart einzeln gesetzt wurde und die deshalb
@@ -166,6 +191,8 @@ export interface Bonzeile {
   readonly menge: number
   readonly einzelpreis: Cents
   readonly steuersatzPromille: SteuersatzPromille
+  readonly steuerbegruendung: string
+  readonly steuerfundstelle: string
   readonly verzehrart: Verzehrart
   readonly verzehrartQuelle: VerzehrartQuelle
   /** Storniert. Die Zeile bleibt stehen, sie wird nur nicht mehr gerechnet. */
@@ -300,6 +327,8 @@ export function bonAusEreignissen(ereignisse: readonly SaleEventData[]): Bon {
           menge: ereignis.menge,
           einzelpreis: ereignis.einzelpreis,
           steuersatzPromille: ereignis.steuersatzPromille,
+          steuerbegruendung: ereignis.steuerbegruendung,
+          steuerfundstelle: ereignis.steuerfundstelle,
           verzehrart: ereignis.verzehrart,
           verzehrartQuelle: ereignis.verzehrartQuelle,
           storniert: false,
@@ -411,6 +440,10 @@ export function fuegePositionHinzu(
   }
   const abweichend = eingabe.verzehrart !== undefined && eingabe.verzehrart !== bon.verzehrart
   const verzehrart = eingabe.verzehrart ?? bon.verzehrart
+  // Der Steuersatz wird aus der Regel bestimmt, nicht uebergeben (Regel 4) —
+  // und die Begruendung kommt mit, weil bei einer Pruefung nicht „welcher
+  // Satz" gefragt wird, sondern „warum dieser".
+  const steuer = regel(eingabe.artikelId, verzehrart, kontext.occurredAt)
   return {
     type: 'LineAdded',
     saleId: bon.saleId,
@@ -420,8 +453,9 @@ export function fuegePositionHinzu(
     bezeichnung: eingabe.bezeichnung,
     menge: eingabe.menge,
     einzelpreis: eingabe.einzelpreis,
-    // Der Steuersatz wird aus der Regel bestimmt, nicht uebergeben (Regel 4).
-    steuersatzPromille: regel(eingabe.artikelId, verzehrart, kontext.occurredAt),
+    steuersatzPromille: steuer.satz,
+    steuerbegruendung: steuer.begruendung,
+    steuerfundstelle: steuer.fundstelle,
     verzehrart,
     verzehrartQuelle: abweichend ? 'position' : 'bon',
   }
@@ -465,11 +499,14 @@ export function wechsleVerzehrart(
       unberuehrt.push(zeile.lineId)
       continue
     }
+    const neu = regel(zeile.artikelId, nachher, kontext.occurredAt)
     betroffen.push({
       lineId: zeile.lineId,
       artikelId: zeile.artikelId,
       vorherSteuersatzPromille: zeile.steuersatzPromille,
-      nachherSteuersatzPromille: regel(zeile.artikelId, nachher, kontext.occurredAt),
+      nachherSteuersatzPromille: neu.satz,
+      vorherBegruendung: zeile.steuerbegruendung,
+      nachherBegruendung: neu.begruendung,
     })
   }
 
@@ -482,6 +519,157 @@ export function wechsleVerzehrart(
     betroffen,
     unberuehrt,
   }
+}
+
+/**
+ * Setzt die Verzehrart **einer Position** — und spaltet die Zeile dafür auf.
+ *
+ * Der alltägliche Fall im Café: „zwei Cappuccino, einer bleibt hier, einer
+ * geht". Die Kasse fasst gleiche Artikel zu einer Zeile zusammen, und damit
+ * teilen sie sich eine Verzehrart. Ohne Aufspaltung wäre der Fall nicht
+ * erfassbar — und die Regel, dass eine Position abweichen darf (Regel 4),
+ * stünde zwar da, wäre aber nicht erreichbar.
+ *
+ * Erzeugt bis zu drei Ereignisse, weil der Log append-only ist (Regel 2):
+ *
+ * 1. `LineVoided` — die zusammengefasste Zeile wird zurückgenommen.
+ * 2. `LineAdded` — der Rest, der bleibt (entfällt, wenn nichts übrig bleibt).
+ * 3. `LineAdded` — der abgespaltene Teil mit der neuen Verzehrart und der
+ *    Herkunft `'position'`.
+ *
+ * Beide neuen Zeilen verweisen über `ersetzt` auf die alte. Bei einer Prüfung
+ * ist das der aussagekräftigere Verlauf: man sieht, dass zwei Cappuccino
+ * erfasst und dann geteilt wurden, nicht nur das Ergebnis.
+ *
+ * Der Steuersatz beider Teile wird **neu aus der Regel bestimmt** — der
+ * bleibende Teil behält seinen nicht einfach, denn er könnte inzwischen
+ * anders lauten.
+ *
+ * `menge` ist die Stückzahl, die abgespalten wird. Sie muss echt kleiner als
+ * die Zeilenmenge sein, wenn etwas übrig bleiben soll, und darf sie nicht
+ * überschreiten.
+ */
+export function setzeVerzehrartFuerPosition(
+  bon: Bon,
+  kontext: Kontext,
+  lineId: string,
+  menge: number,
+  verzehrart: Verzehrart,
+  regel: Steuersatzregel,
+): SaleEventData[] {
+  if (bon.zustand !== 'offen') {
+    throw new BonFehler(
+      'Der Bon ist ' + bon.zustand + '; die Verzehrart einer Position ist nicht mehr aenderbar.',
+    )
+  }
+  const zeile = bon.zeilen.find((z) => z.lineId === lineId)
+  if (zeile === undefined) throw new BonFehler('Unbekannte Position: ' + lineId)
+  if (zeile.storniert) throw new BonFehler('Position ist storniert: ' + lineId)
+  if (!Number.isSafeInteger(menge) || menge <= 0) {
+    throw new BonFehler('Die abzuspaltende Menge muss eine positive Ganzzahl sein: ' + String(menge))
+  }
+  if (Math.abs(zeile.menge) < menge) {
+    throw new BonFehler(
+      'Die Position hat nur ' + String(zeile.menge) + ' Stueck, abgespalten werden sollen ' +
+        String(menge),
+    )
+  }
+
+  const vorzeichen = zeile.menge < 0 ? -1 : 1
+  const rest = Math.abs(zeile.menge) - menge
+
+  const storno = stornierePosition(bon, kontext, lineId, 'Verzehrart je Position gesetzt')
+  const ereignisse: SaleEventData[] = [storno]
+  let zwischenstand = bonAusEreignissen([...ereignisseVon(bon), storno])
+
+  const bleibt =
+    rest === 0
+      ? undefined
+      : fuegePositionHinzu(
+          zwischenstand,
+          kontext,
+          {
+            artikelId: zeile.artikelId,
+            bezeichnung: zeile.bezeichnung,
+            menge: rest * vorzeichen,
+            einzelpreis: zeile.einzelpreis,
+            // Der bleibende Teil behaelt, was er hatte: war er einzeln
+            // gesetzt, bleibt er einzeln gesetzt.
+            ...(zeile.verzehrartQuelle === 'position' ? { verzehrart: zeile.verzehrart } : {}),
+          },
+          regel,
+        )
+  if (bleibt !== undefined) {
+    ereignisse.push({ ...bleibt, ersetzt: lineId })
+    zwischenstand = bonAusEreignissen([...ereignisseVon(bon), storno, { ...bleibt, ersetzt: lineId }])
+  }
+
+  const abgespalten = fuegePositionHinzu(
+    zwischenstand,
+    kontext,
+    {
+      artikelId: zeile.artikelId,
+      bezeichnung: zeile.bezeichnung,
+      menge: menge * vorzeichen,
+      einzelpreis: zeile.einzelpreis,
+      verzehrart,
+    },
+    regel,
+  )
+  // Ausdruecklich `'position'`: auch wenn die gewaehlte Verzehrart zufaellig
+  // der des Bons entspricht, ist sie hier von Hand gesetzt und darf vom
+  // grossen Umschalter nicht mehr mitgerissen werden.
+  ereignisse.push({ ...abgespalten, verzehrartQuelle: 'position', ersetzt: lineId })
+  return ereignisse
+}
+
+/**
+ * Die Ereignisse, die zu diesem Bonzustand gefuehrt haben — rekonstruiert.
+ *
+ * `setzeVerzehrartFuerPosition` braucht Zwischenstaende, um mehrere Ereignisse
+ * aufeinander aufzubauen. Der Bon selbst haelt seine Ereignisse nicht; er ist
+ * ihre Faltung. Statt sie hereinzureichen, wird hier der kleinste Satz
+ * gebildet, der denselben Zustand ergibt.
+ *
+ * Das ist bewusst **nicht** die Historie: Stornos und ersetzte Zeilen sind
+ * darin nicht enthalten. Fuer den Zweck genuegt es — gebraucht wird nur, dass
+ * `fuegePositionHinzu` die vorhandenen Zeilen und die Verzehrart des Bons
+ * sieht.
+ */
+function ereignisseVon(bon: Bon): SaleEventData[] {
+  const start: SaleStarted = {
+    type: 'SaleStarted',
+    saleId: bon.saleId,
+    deviceId: bon.deviceId,
+    occurredAt: '1970-01-01T00:00:00+00:00' as IsoTimestamp,
+    verzehrart: bon.verzehrart,
+  }
+  const zeilen: SaleEventData[] = bon.zeilen.map((z) => ({
+    type: 'LineAdded',
+    saleId: bon.saleId,
+    occurredAt: '1970-01-01T00:00:00+00:00' as IsoTimestamp,
+    lineId: z.lineId,
+    artikelId: z.artikelId,
+    bezeichnung: z.bezeichnung,
+    menge: z.menge,
+    einzelpreis: z.einzelpreis,
+    steuersatzPromille: z.steuersatzPromille,
+    steuerbegruendung: z.steuerbegruendung,
+    steuerfundstelle: z.steuerfundstelle,
+    verzehrart: z.verzehrart,
+    verzehrartQuelle: z.verzehrartQuelle,
+    ...(z.ersetzt === undefined ? {} : { ersetzt: z.ersetzt }),
+  }))
+  const stornos: SaleEventData[] = bon.zeilen
+    .filter((z) => z.storniert)
+    .map((z) => ({
+      type: 'LineVoided',
+      saleId: bon.saleId,
+      occurredAt: '1970-01-01T00:00:00+00:00' as IsoTimestamp,
+      lineId: z.lineId,
+      grund: z.stornogrund ?? 'storniert',
+    }))
+  return [start, ...zeilen, ...stornos]
 }
 
 export function stornierePosition(
@@ -529,6 +717,8 @@ export function aendereMenge(
     menge: neueMenge,
     einzelpreis: zeile.einzelpreis,
     steuersatzPromille: zeile.steuersatzPromille,
+    steuerbegruendung: zeile.steuerbegruendung,
+    steuerfundstelle: zeile.steuerfundstelle,
     verzehrart: zeile.verzehrart,
     verzehrartQuelle: zeile.verzehrartQuelle,
     ersetzt: lineId,

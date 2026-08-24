@@ -50,6 +50,7 @@ import {
   isoTimestamp,
   nimmZahlung,
   schliesseBonAb,
+  setzeVerzehrartFuerPosition,
   starteBon,
   stornierePosition,
   STEUERSATZ,
@@ -774,6 +775,32 @@ export class Kasse {
       steuersatzregel,
     )
     return this.schreibe(storno, neu)
+  }
+
+  /**
+   * Setzt die Verzehrart **einer Position** und spaltet die Zeile dafuer auf.
+   *
+   * Der alltaegliche Fall im Cafe: zwei Cappuccino, einer bleibt hier, einer
+   * geht. Ohne Aufspaltung teilen sich zusammengefasste Zeilen eine Verzehrart,
+   * und Regel 4 („pro Position ueberschreibbar") waere zwar aufgeschrieben,
+   * aber nicht erreichbar.
+   *
+   * `menge` ist die Stueckzahl, die abgespalten wird — vorgabegemaess eine.
+   * Ein Tipp auf den kleinen Umschalter bewegt also **ein** Stueck, und wer
+   * beide bewegen will, tippt zweimal. Das ist berechenbarer als eine
+   * Mengenabfrage, die bei zwei Stueck niemand ausfuellen will.
+   */
+  async setzeVerzehrartFuerPosition(
+    lineId: string,
+    verzehrart: Verzehrart,
+    menge = 1,
+  ): Promise<Bon> {
+    return this.reihum(async () => {
+      const bon = this.verlangeOffenenBon()
+      return this.schreibe(
+        ...setzeVerzehrartFuerPosition(bon, this.kontext(), lineId, menge, verzehrart, steuersatzregel),
+      )
+    })
   }
 
   async entfernePosition(lineId: string, grund = 'Vom Kassierer entfernt'): Promise<Bon> {

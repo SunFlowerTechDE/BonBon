@@ -28,6 +28,67 @@ bindet er auf `::1`; `127.0.0.1` schlägt fehl, `localhost` funktioniert.
 - TSE-Statuspunkt grün/gelb/rot im Kopf
 - Nach dem Abschluss zurück zum Raster, ohne Bestätigungsdialog
 
+## Steuersätze — Vorschlag, keine Auskunft
+
+Die Zuordnung steht **je Produkt** in [`stammdaten.ts`](src/stammdaten.ts), getrennt
+für „im Haus" und „außer Haus", jeweils mit **Begründung und Fundstelle**. Beide
+gehen in den Event Log: bei einer Prüfung lautet die Frage nicht „welcher Satz",
+sondern „warum dieser".
+
+Eine Sammelregel („im Haus 19, mitnehmen 7") war für den größeren Teil des
+Sortiments falsch — und der Fehler war von außen nicht zu sehen, weil die Kasse
+zuverlässig den falschen Satz rechnete.
+
+| Produkt | im Haus | außer Haus | warum |
+|---|---|---|---|
+| Kaffee, Espresso, Tee | 19 % | 19 % | zubereitetes Getränk, steht nicht in Anlage 2 |
+| Cappuccino | 19 % | 19 % | Milchanteil rund zwei Drittel — unter 75 % |
+| Latte Macchiato | 19 % | **7 %** | Lieferung eines Milchmischgetränks ≥ 75 % Milch |
+| Latte mit Haferdrink | 19 % | 19 % | Milchersatz ist keine Milch |
+| Kuchen, Gebäck | **7 %** | **7 %** | Speise — seit 1.1.2026 unabhängig von der Verzehrart |
+| Wasser 0,33, Apfelschorle | 19 % | 19 % | Getränk; Trinkwasser in Fertigpackung ausgenommen |
+
+Fundstellen: § 12 Abs. 2 Nr. 15 UStG (Steueränderungsgesetz 2025, seit 1.1.2026,
+[ZDH](https://www.zdh.de/ueber-uns/fachbereich-steuern-und-finanzen/umsatzsteuer/ermaessigter-umsatzsteuersatz-fuer-die-gastronomie-ab-112026/))
+· Anlage 2 Nr. 4 und Nr. 34 zu § 12 Abs. 2 Nr. 1 UStG · FG Baden-Württemberg,
+Urteil vom 14.3.2024, 1 K 232/24.
+
+**Seit dem 1. Januar 2026 bewegt die Verzehrart den Steuersatz nur noch bei
+Milchmischgetränken.** Dass der große Umschalter beim Kuchen nichts mehr ändert,
+ist das richtige Verhalten — kein übersehener Fall.
+
+Jede Zuordnung ist änderbar, und die Oberfläche trägt sichtbar den Hinweis
+„Steuersätze sind Vorschläge und mit dem Steuerberater zu prüfen". Ohne den
+wirkt die Vorbelegung wie eine Auskunft, und die darf diese Software nicht
+geben (§ 5 StBerG, CLAUDE.md Regel 20).
+
+## Verzehrart je Position
+
+„Zwei Cappuccino, einer bleibt hier, einer geht" ist im Café Alltag. Weil die
+Kasse gleiche Artikel zu einer Zeile zusammenfasst, teilten sie sich vorher eine
+Verzehrart — die Regel „pro Position überschreibbar" stand da, war aber nicht
+bedienbar.
+
+Jede Bonzeile hat deshalb einen eigenen kleinen Umschalter (`Hier` / `Mit`). Ein
+Tipp bewegt **ein Stück** in die andere Verzehrart und spaltet die Zeile dabei
+auf: Storno plus zwei neue Zeilen, beide mit `ersetzt` auf die alte, weil der Log
+append-only ist. Die abgespaltene Zeile bekommt Herkunft `position` und wird vom
+großen Umschalter nicht mehr mitgerissen.
+
+Einzeln gesetzte Zeilen sind **markiert** — Pfirsich-Streifen plus Legende. Ohne
+die Kennzeichnung wundert sich das Personal, warum der große Schalter manche
+Zeilen nicht ändert, und hält es für einen Fehler.
+
+Im Fenster nachgemessen:
+
+```
+1 × Latte Macchiato   Hier   A   4,20
+1 × Latte Macchiato   Mit    B   4,20   [einzeln]
+Steuerausweis:  B 7 % netto 3,93 USt 0,27 · A 19 % netto 3,53 USt 0,67
+```
+
+---
+
 ## Farbwelt und Schrift
 
 Die Farbwerte stehen an **einer** Stelle: [`src/farben.ts`](src/farben.ts).

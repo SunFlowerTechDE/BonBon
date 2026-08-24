@@ -83,6 +83,8 @@ export const FLAECHEN: readonly Flaeche[] = [
   { name: 'Primaeraktion', grund: 'beere', schrift: 'weiss', zweck: 'Zahlen, Bar abschliessen' },
   { name: 'Warnung', grund: 'koralle', schrift: 'text', zweck: 'Fehlermeldung, Position loeschen' },
   { name: 'Bon verwerfen', grund: 'koralle', schrift: 'text', zweck: 'Bon loeschen — keine Aktion, ein Abbruch' },
+  { name: 'Zeilen-Verzehrart', grund: 'neutral', schrift: 'text', zweck: 'Umschalter je Bonzeile' },
+  { name: 'Zeilen-Verzehrart gesetzt', grund: 'pfirsich', schrift: 'text', zweck: 'Hinweis: einzeln gesetzte Zeile' },
   { name: 'TSE bereit', grund: 'signalGut', schrift: 'weiss', zweck: 'Zustandsanzeige' },
   { name: 'TSE gestoert', grund: 'signalWarnung', schrift: 'weiss', zweck: 'Zustandsanzeige' },
   { name: 'TSE ausgefallen', grund: 'signalFehler', schrift: 'weiss', zweck: 'Zustandsanzeige' },

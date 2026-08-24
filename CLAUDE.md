@@ -63,6 +63,8 @@ Negative Beträge sind erlaubt — Stornos und Rabatte brauchen sie.
 
 Er ist eine Funktion aus `(Produkt, Verzehrart, Datum)`. Die Verzehrart („hier essen" vs. „mitnehmen") entscheidet über 7 % oder 19 % und ist für diese Zielgruppe die wichtigste Einzelinteraktion der ganzen App.
 
+**Seit dem 1. Januar 2026 gilt das nur noch für Milchmischgetränke** (§ 12 Abs. 2 Nr. 15 UStG): Speisen sind in beiden Verzehrarten ermäßigt, Getränke in beiden Fällen Regelsatz. Die Verzehrart bleibt trotzdem aufzeichnungspflichtig und bleibt die wichtigste Einzelinteraktion — siehe Regel 20 für die Tabelle mit Fundstellen.
+
 Sie wird **pro Bon** gesetzt und ist **pro Position überschreibbar**. Und: Die Entscheidung wird im Event Log mitgeschrieben, nicht nur das Ergebnis — bei einer Prüfung muss nachvollziehbar sein, *warum* 7 % berechnet wurden.
 
 ### 5. Preise werden nie überschrieben
@@ -374,14 +376,16 @@ Der Preis ist gemessen und tragbar: im M0-Lasttest kosteten einzeln geschriebene
 
 Die Transaktion wird beim **Bonbeginn** geöffnet, nicht beim Abschluss — die KassenSichV verlangt die Protokollierung mit Beginn des Aufzeichnungsvorgangs. Daraus folgt ein Zustand, den es vorher nicht gab: eine Transaktion, die begonnen wurde und nie endete.
 
-Beim Start der Kasse wird die TSE deshalb nach offenen Transaktionen gefragt (fiskaltrust: Zero-Receipt `0x4445000000000002`, dessen Antwort `CurrentStartedTransactionNumbers` trägt). Jede wird gegen den Event Log abgeglichen:
+**Die Quelle dafür ist der Event Log, nicht die TSE.** Am laufenden fiskaltrust-Launcher gemessen: die Antwort auf `start-transaction` enthält genau eine Signatur und **keine Transaktionsnummer**, und die Antwort des Zero-Receipts führt keine offenen Transaktionen auf. `CurrentStartedTransactionNumbers` ist ein *ausgehendes* Feld für den impliziten Fail-Transaction-Beleg, kein Abfrageweg — die Middleware ordnet über `cbReceiptReference` zu.
+
+Die Kasse hält deshalb selbst fest, wann sie eine Transaktion geöffnet hat, und weiß daraus, was offen steht. Eine Abfrage an die TSE bleibt zweite Quelle für Reste, die nicht von dieser Kasse stammen. Jede offene Transaktion wird gegen den Event Log abgeglichen:
 
 | Log | Was passiert |
 |---|---|
 | Bon vollständig (`SaleFinished` steht drin) | Transaktion abschließen — der Vorgang hat stattgefunden |
 | sonst | Transaktion als abgebrochen beenden (Fail-Transaction `0x444500000000000B`) |
 
-**Der Vorgang wird protokolliert, nicht stillschweigend bereinigt** — er geht als eigenes Ereignis in den Log. Eine offene Transaktion klammheimlich zu schließen wäre die stille Änderung aus Regel 1.
+**Der Vorgang wird protokolliert, nicht stillschweigend bereinigt** — er geht als eigenes Ereignis in den Log. Festgehalten wird nur der **Erfolg**: ein gescheiterter Versuch bekommt kein Ereignis, sonst gälte die Transaktion beim nächsten Start als erledigt und bliebe für immer offen. Eine offene Transaktion klammheimlich zu schließen wäre die stille Änderung aus Regel 1.
 
 Antwortet die TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8). Der Abgleich wird beim nächsten Start nachgeholt, und der Aufschub wird gemeldet.
 
@@ -390,6 +394,47 @@ Antwortet die TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8).
 Ein Mock, der bei Transaktionsnummer 1 wieder anfängt und offene Transaktionen vergisst, verdeckt genau die Fehler, die im Laden auffallen. Eine echte TSE ist ein Gerät, kein Prozess: sie vergisst beim Neustart der Kasse nichts. Transaktionsnummer, Signaturzähler und offene Transaktionen überdauern deshalb auch beim `MockTse` einen Neustart.
 
 Das ist dieselbe Regel wie „jeder Mock muss kaputtgehen können", nur andersherum: ein Mock, der bequemer ist als das echte Gerät, testet den falschen Fall.
+
+
+### 20. BonBon schlägt Steuersätze vor. Es entscheidet sie nicht.
+
+Die Software liefert eine **Vorbelegung mit Fundstelle**, keine Auskunft. Drei Bedingungen, alle drei nicht verhandelbar:
+
+1. **Jede Zuordnung ist änderbar.** Eine feste Zuordnung wäre faktisch eine Entscheidung.
+2. **Jede Zuordnung trägt ihre Fundstelle und eine Begründung**, und beide gehen in den Event Log. Bei einer Prüfung lautet die Frage nicht „welcher Satz", sondern „warum dieser Satz" — und die Antwort muss aus den Daten kommen, nicht aus der Erinnerung dessen, der die Kasse eingerichtet hat.
+3. **Die Oberfläche sagt sichtbar**, dass die Zuordnung mit dem Steuerberater zu prüfen ist. Nicht in den Einstellungen versteckt: ohne den Hinweis wirkt die Vorbelegung wie eine Auskunft.
+
+**Im Support wird die Frage nie beantwortet, welcher Steuersatz für ein konkretes Produkt gilt.** Auch nicht „unter uns", auch nicht als „ich würde sagen". Das ist unbefugte Hilfeleistung in Steuersachen (§ 5 StBerG). Die zulässige Antwort ist, wo es steht und wie man es ändert — nicht, was richtig ist. Dieselbe Grenze wie bei Regel 10 (ELSTER): den Weg zeigen, nicht die Sache entscheiden.
+
+### Der Steuersatz gehört zum Produkt, nicht zu einer Sammelregel
+
+„Im Haus 19, mitnehmen 7" ist keine Vereinfachung, sondern falsch. Der Satz hängt am einzelnen Produkt, und die Verzehrart ist nur einer von mehreren Faktoren.
+
+Gefunden im M2-Sortiment, nachgeschlagen statt angenommen:
+
+| Produkt | im Haus | außer Haus | warum |
+|---|---|---|---|
+| Kaffee, Espresso, Tee | 19 % | 19 % | zubereitetes Getränk, steht nicht in Anlage 2 |
+| Cappuccino | 19 % | 19 % | Milchanteil rund zwei Drittel — unter 75 % |
+| Latte Macchiato | 19 % | **7 %** | Lieferung eines Milchmischgetränks ≥ 75 % Milch |
+| Latte mit Haferdrink | 19 % | 19 % | Milchersatz ist keine Milch |
+| Kuchen, Gebäck | **7 %** | **7 %** | Speise — seit 1.1.2026 unabhängig von der Verzehrart |
+| Wasser 0,33, Apfelschorle | 19 % | 19 % | Getränk; Trinkwasser in Fertigpackung ist ausgenommen |
+
+Fundstellen: § 12 Abs. 2 Nr. 15 UStG (Steueränderungsgesetz 2025, seit 1.1.2026) · Anlage 2 Nr. 4 und Nr. 34 zu § 12 Abs. 2 Nr. 1 UStG · FG Baden-Württemberg, Urteil vom 14.3.2024, 1 K 232/24.
+
+**Seit dem 1. Januar 2026 bewegt die Verzehrart den Steuersatz nur noch bei Milchmischgetränken.** Speisen sind in beiden Fällen ermäßigt, Getränke in beiden Fällen Regelsatz. Der große Umschalter bleibt trotzdem die wichtigste Einzelinteraktion (Regel 4) — er entscheidet weiterhin über den einen Fall, der im Café täglich vorkommt, und die DSFinV-K will die Verzehrart ohnehin aufgezeichnet sehen.
+
+**Der Parameter `zeitpunkt` ist deswegen keine Zierde.** Ein Export für einen Zeitraum vor 2026 braucht die damaligen Sätze. Die Vorbelegung bildet heute nur den aktuellen Stand ab; das ist eine bekannte Lücke und gehört nach M4.
+
+### Eine Position darf von der Verzehrart des Bons abweichen — und das muss erreichbar sein
+
+„Zwei Cappuccino, einer bleibt hier, einer geht" ist im Café Alltag. Weil die Kasse gleiche Artikel zu einer Zeile zusammenfasst, teilen sie sich sonst eine Verzehrart, und die Regel stünde zwar da, wäre aber nicht bedienbar.
+
+Deshalb: jede Bonzeile hat ihren eigenen Umschalter. Wird er benutzt, **spaltet sich die Zeile auf** — Storno plus zwei neue Zeilen, beide mit `ersetzt` auf die alte, weil der Log append-only ist. Die abgespaltene Zeile bekommt Herkunft `position` und wird vom Bon-Umschalter nicht mehr mitgerissen.
+
+**Einzeln gesetzte Zeilen sind sichtbar zu kennzeichnen.** Sonst wundert sich das Personal, warum der große Schalter manche Zeilen nicht ändert — und hält es für einen Fehler.
+
 
 ---
 

@@ -45,11 +45,21 @@ function kontext(startNummer = 1): Kontext {
 /**
  * Steuersatz als Funktion aus (Produkt, Verzehrart, Datum) — Regel 4.
  *
- * Speisen und Getraenke: im Haus 19 %, ausser Haus 7 %. Alkohol immer 19 %.
+ * Eine **erfundene** Regel fuer den Kern: im Haus 19 %, ausser Haus 7 %,
+ * Alkohol immer 19 %. Der Kern kennt die echten Saetze nicht und soll sie
+ * nicht kennen; er bekommt die Regel von aussen. Die tatsaechliche
+ * Vorbelegung mit ihren Fundstellen steht in den Stammdaten der Anwendung.
+ *
+ * Die Regel liefert eine **Entscheidung**, nicht nur eine Zahl: bei einer
+ * Pruefung lautet die Frage „warum dieser Satz".
  */
 const regel: Steuersatzregel = (artikelId, verzehrart) => {
-  if (artikelId === 'BIER') return STEUERSATZ.regel
-  return verzehrart === 'im-haus' ? STEUERSATZ.regel : STEUERSATZ.ermaessigt
+  if (artikelId === 'BIER') {
+    return { satz: STEUERSATZ.regel, begruendung: 'Alkohol', fundstelle: 'Testregel' }
+  }
+  return verzehrart === 'im-haus'
+    ? { satz: STEUERSATZ.regel, begruendung: 'Im Haus', fundstelle: 'Testregel' }
+    : { satz: STEUERSATZ.ermaessigt, begruendung: 'Ausser Haus', fundstelle: 'Testregel' }
 }
 
 const KAESEKUCHEN = {
