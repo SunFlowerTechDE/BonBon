@@ -21,9 +21,19 @@ import {
   steuerKennzeichen,
   steuersatzText,
 } from '@bonbon/core'
-import { type PrinterPort, type TsePort, type TseZustand, euroText } from '@bonbon/ports'
+import { MockTse, type PrinterPort, type TsePort, type TseZustand, euroText } from '@bonbon/ports'
 
-import { type EventLogPort, VorschauDrucker, baueDrucker, baueEventLog, baueTse, entwicklungsHasher } from './adapter.js'
+import {
+  type EventLogPort,
+  VorschauDrucker,
+  baueDateien,
+  baueDrucker,
+  baueEventLog,
+  baueTse,
+  nebenDerAnwendung,
+  baueTseSpeicher,
+  entwicklungsHasher,
+} from './adapter.js'
 import { TSE_ANZEIGE, type TseAnzeigeStatus } from './farben.js'
 import { type Abschlussergebnis, Kasse, schnellbetraege } from './kasse.js'
 import { type Konfiguration, ladeKonfiguration, laeuftInTauri } from './konfiguration.js'
@@ -54,19 +64,29 @@ export function App(): JSX.Element {
   useEffect(() => {
     let abgebrochen = false
     void (async () => {
-      const k = await ladeKonfiguration(melde)
+      const dateien = baueDateien()
+      const k = await ladeKonfiguration(dateien, melde)
       if (abgebrochen) return
       const hasher = entwicklungsHasher()
-      const tse = baueTse(k, melde)
+      const tse = baueTse(k, await baueTseSpeicher(dateien, melde), melde)
+      if (tse instanceof MockTse) await tse.ladeZustand()
       const drucker = baueDrucker(k.drucker, melde)
-      const log = baueEventLog(k.eventLog, hasher, melde)
+      // Ein relativer Pfad meint „neben der Anwendung", nicht „neben dem
+      // Arbeitsverzeichnis". Sonst legte jeder Start aus einem anderen Ordner
+      // eine neue, leere Datenbank an — und die Belegnummer finge wieder bei 1
+      // an, diesmal ohne dass es jemandem auffiele.
+      const log = baueEventLog(
+        await nebenDerAnwendung(dateien, k.eventLog),
+        hasher,
+        melde,
+      )
       tseRef.current = tse
       druckerRef.current = drucker
       logRef.current = log
       const neueKasse = new Kasse(k, tse, drucker, log, melde)
-      // Vor dem ersten Bon: an die schon geschriebenen Bons anknuepfen, sonst
-      // beginnt die Belegnummer nach jedem Neustart wieder bei 1.
-      await neueKasse.knuepfeAnVorgeschichteAn()
+      // Vor dem ersten Bon: Belegnummer aus dem Log holen, einen unbeendeten
+      // Bon abschliessen und offene TSE-Transaktionen aufloesen.
+      await neueKasse.richteEin()
       if (abgebrochen) return
       kasseRef.current = neueKasse
       setKonfiguration(k)
@@ -82,10 +102,17 @@ export function App(): JSX.Element {
 
   const kasse = kasseRef.current
 
-  const sicher = useCallback((tuwas: () => void) => {
+  /**
+   * Fuehrt etwas aus und zeigt einen Fehler an, statt ihn zu verschlucken.
+   *
+   * Asynchron, weil jedes Bonereignis geschrieben wird, wenn es passiert —
+   * und ein Ereignis ist erst erfasst, wenn es auf dem Datentraeger steht.
+   * Scheitert das Schreiben, sieht der Kassierer es hier.
+   */
+  const sicher = useCallback(async (tuwas: () => Promise<void>) => {
     try {
       setFehler(undefined)
-      tuwas()
+      await tuwas()
     } catch (f) {
       setFehler(f instanceof Error ? f.message : String(f))
     }
@@ -94,11 +121,10 @@ export function App(): JSX.Element {
   const artikelTippen = useCallback(
     (artikelId: string) => {
       if (kasse === undefined) return
-      sicher(() => {
-        if (kasse.bon === undefined || !kasse.offen) {
-          setBon(kasse.beginneBon('im-haus'))
-        }
-        setBon(kasse.tippeArtikel(artikelId))
+      // Der Bon wird in der Kasse geoeffnet, nicht hier: zwei ueberlappende
+      // Tipps pruefen sonst beide „ist ein Bon offen?" mit Nein.
+      void sicher(async () => {
+        setBon(await kasse.tippeArtikel(artikelId, 'im-haus'))
       })
     },
     [kasse, sicher],
@@ -107,16 +133,28 @@ export function App(): JSX.Element {
   const verzehrartSetzen = useCallback(
     (neu: Verzehrart) => {
       if (kasse === undefined) return
-      sicher(() => {
-        if (kasse.bon === undefined || !kasse.offen) {
-          setBon(kasse.beginneBon(neu))
-        } else {
-          setBon(kasse.setzeVerzehrart(neu))
-        }
+      void sicher(async () => {
+        setBon(await kasse.setzeVerzehrart(neu))
       })
     },
     [kasse, sicher],
   )
+
+  /**
+   * Verwirft den Bon.
+   *
+   * Er verschwindet nicht — `SaleCancelled` mit Grund geht in den Log und die
+   * TSE-Transaktion wird abgebrochen. Die Belegnummer bleibt verbraucht.
+   */
+  const bonVerwerfen = useCallback(() => {
+    if (kasse === undefined) return
+    void sicher(async () => {
+      await kasse.brichAb('Vom Kassierer verworfen')
+      setBon(undefined)
+      setAnsicht('raster')
+      if (tseRef.current !== undefined) setTseZustand(await tseRef.current.zustand())
+    })
+  }, [kasse, sicher])
 
   const abschliessen = useCallback(
     async (zahlart: 'bar' | 'karte', gegeben: Cents) => {
@@ -214,7 +252,11 @@ export function App(): JSX.Element {
                     className="weg"
                     title="Position entfernen"
                     onClick={() => {
-                      if (kasse !== undefined) sicher(() => setBon(kasse.entfernePosition(z.lineId)))
+                      if (kasse !== undefined) {
+                        void sicher(async () => {
+                          setBon(await kasse.entfernePosition(z.lineId))
+                        })
+                      }
                     }}
                   >
                     ×
@@ -245,6 +287,15 @@ export function App(): JSX.Element {
             <span>Summe</span>
             <strong>{euroText(summe)} €</strong>
           </div>
+
+          <button
+            type="button"
+            className="verwerfen"
+            disabled={bon === undefined || !kasse?.offen}
+            onClick={bonVerwerfen}
+          >
+            Bon verwerfen
+          </button>
 
           <button
             type="button"

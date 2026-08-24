@@ -351,6 +351,24 @@ select {
   font-weight: 700;
 }
 
+/*
+ * Verwerfen ist kein Nebenweg zum Zahlen, sondern ein Abbruch — deshalb
+ * Koralle und nicht Beere, und deshalb schmaler als der Zahlen-Knopf. Der Bon
+ * verschwindet dabei nicht: `SaleCancelled` mit Grund geht in den Log.
+ */
+.verwerfen {
+  padding: 0.6rem;
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--koralle);
+  color: var(--text);
+}
+.verwerfen:disabled { opacity: 0.4; cursor: default; }
+
 .zahlen {
   padding: 1rem;
   font-size: 1.35rem;

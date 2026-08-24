@@ -98,6 +98,62 @@ danach die `unicode-range`-Angaben in `stil.css` abgleichen. Lizenz: SIL OFL
 
 ---
 
+## Der Bon lebt im Log, von Anfang an
+
+Jedes Ereignis wird geschrieben, **wenn es passiert** — `SaleStarted` beim
+Öffnen, `LineAdded` beim Antippen, `DiningModeChanged` beim Umschalten. Nicht
+beim Abschluss: ein Log, der erst am Ende schreibt, ist kein append-only-Log.
+Bis dahin liegt der ganze Vorgang im Arbeitsspeicher, und ein Absturz nimmt ihn
+spurlos mit. Der Preis ist gemessen: im M0-Lasttest kosteten einzeln
+geschriebene Ereignisse unter Stoßlast **p99 1,4 ms**.
+
+Daraus folgt dreierlei:
+
+- **Erst schreiben, dann übernehmen.** Scheitert das Schreiben, hat auch der
+  Bon das Ereignis nicht — sonst zeigte die Kasse eine Position, die nirgends
+  steht.
+- **Der Log kommt vor der Signatur.** Ein Absturz dazwischen ist reparierbar
+  (die offene Transaktion wird beim nächsten Start abgeschlossen); umgekehrt
+  stünde ein signierter, ausgegebener Vorgang im Log als abgebrochen.
+- **Ein verworfener Bon hinterlässt `SaleCancelled` mit Grund.** Er verschwindet
+  nicht, und seine Belegnummer ist verbraucht.
+
+### Was beim Start passiert
+
+`Kasse.richteEin()` — vor dem ersten Bon:
+
+1. **Belegnummer aus dem Log.** Aus dem letzten `SaleStarted`, nicht aus einer
+   Zählung. Die Zählung stimmte nur, solange jeder begonnene Bon auch
+   abgeschlossen wurde; ein verworfener Bon hätte seine Nummer ein zweites Mal
+   vergeben lassen.
+2. **Unbeendeter Bon.** Wurde einer begonnen und nie beendet, bekommt er sein
+   `SaleCancelled`. Er wird **nicht** fortgesetzt: was zwischen dem letzten
+   geschriebenen Ereignis und dem Absturz noch getippt wurde, weiß niemand.
+3. **Offene TSE-Transaktionen.**
+
+### Verwaiste TSE-Transaktionen
+
+Die TSE-Transaktion wird beim **Bonbeginn** geöffnet — die KassenSichV verlangt
+die Protokollierung mit Beginn des Aufzeichnungsvorgangs. Stürzt die Kasse
+danach ab, steht sie offen, ohne lokales Gegenstück, und bleibt es. Eine echte
+TSE hat dafür eine Obergrenze; irgendwann nimmt sie keine neue mehr an.
+
+| Was der Log sagt | Was passiert |
+|---|---|
+| Bon vollständig (`SaleFinished` steht drin) | Transaktion abschließen — der Vorgang hat stattgefunden |
+| sonst | Transaktion als abgebrochen beenden |
+
+Beides geht als eigenes Ereignis (`TseTransaktionAufgeloest`) in den Log.
+Stillschweigend bereinigen wäre die stille Änderung aus Regel 1. Antwortet die
+TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8) — der
+Abgleich wird beim nächsten Start nachgeholt, und der Aufschub wird gemeldet.
+
+Bei fiskaltrust (M3): abgefragt über den Zero-Receipt
+`0x4445000000000002`, dessen Antwort `CurrentStartedTransactionNumbers` trägt;
+beendet über die Fail-Transaction `0x444500000000000B`.
+
+---
+
 ## Was noch nicht dran ist
 
 Kein Rabatt in der Oberfläche, kein Bon parken, keine Bedienerverwaltung, kein
@@ -107,38 +163,34 @@ Tagesabschluss, keine Artikelverwaltung.
 
 ## Adapter — nichts ist fest verdrahtet
 
-Welche TSE, welcher Drucker, welcher Event Log steht in
-[`public/bonbon.config.json`](public/bonbon.config.json) und wird zur Laufzeit
-gelesen (CLAUDE.md, Ports und Adapter).
+Welche TSE, welcher Drucker, welcher Event Log steht in einer
+**`bonbon.config.json` neben der Anwendung** und wird beim Start gelesen
+(CLAUDE.md, Ports und Adapter). Vorlage:
+[`bonbon.config.beispiel.json`](bonbon.config.beispiel.json).
 
-Die mitgelieferte Datei steht auf dem **echten Weg** — escpresso auf Port 9100
-und SQLite:
+Sie lag vorher in `public/` und wurde beim Bauen ins Anwendungsbündel gepackt —
+damit war sie ohne neuen Bau nicht zu ändern. Für eine Kasse unbrauchbar: jeder
+Laden hat eine andere Drucker-IP, und niemand baut deswegen die Software neu.
 
-```json
-{
-  "drucker":  { "art": "tcp", "host": "127.0.0.1", "port": 9100 },
-  "eventLog": { "art": "sqlite", "pfad": "bonbon-eventlog.db" }
-}
+```
+bonbon-kasse.exe
+bonbon.config.json        ← hierhin
+bonbon-eventlog.db        ← ein relativer Pfad meint dieses Verzeichnis
+bonbon-tse-zustand.json   ← Zustand der MockTse
 ```
 
-Fehlt die Datei oder ist sie unlesbar, gilt die Vorgabe aus
-[`src/konfiguration.ts`](src/konfiguration.ts) — Mock-TSE, Vorschaudrucker,
-Event Log im Speicher. Die App startet damit **ohne jede Peripherie**, und sie
-sagt im Protokoll, dass die Vorgabe greift.
+Drei Fälle, die auseinandergehalten werden:
+
+| | |
+|---|---|
+| Datei fehlt | Vorgaben gelten (Mock-TSE, Vorschaudrucker, Event Log im Speicher) — **und es wird gesagt, wo sie erwartet wurde** |
+| Datei ist da, aber unlesbar | Fehler, gemeldet mit Grund. Nicht als „fehlt" durchgewunken — sonst liefe die Kasse mit Vorschaudrucker weiter, obwohl ein echter eingerichtet war |
+| Datei ist da und gültig | gilt |
 
 Ist `tcp` eingestellt und escpresso läuft nicht, wird der Verkauf trotzdem
 abgeschlossen und signiert; der Bon gilt als **nicht gedruckt** und der Grund
 steht in der Abschlussmeldung. Ein fehlender Drucker darf einen Umsatz nicht
 verhindern.
-
-> **Offener Punkt.** Die Datei liegt in `public/` und wird beim Bau in das
-> Anwendungsbündel gepackt. Sie lässt sich also derzeit **nicht ändern, ohne
-> neu zu bauen** — für eine Kasse im Laden zu wenig. Die Konfiguration gehört
-> neben die Anwendung, gelesen über den Rust-Teil. Steht für M3 an.
-
-`tcp` und `sqlite` brauchen den Rust-Teil. Im Browser fällt die App auf
-Vorschau und Speicher zurück **und sagt es im Protokoll** — statt es zu
-verschweigen.
 
 Die TSE steht auf `mock`. `fiskaltrust` ist noch nicht angebunden (M3); wird es
 eingestellt, meldet die Kasse ausdrücklich, dass trotzdem der Mock läuft und
@@ -157,6 +209,10 @@ vier Befehle als **schmale Transportschicht**:
 | `tcp_erreichbar` | Druckerprüfung ohne zu drucken |
 | `eventlog_anhaengen` | SQLite, WAL, Hash-Kette |
 | `eventlog_anzahl` | Zählen |
+| `eventlog_letztes_ereignis` | das letzte `SaleStarted` — daraus die Belegnummer |
+| `eventlog_ereignisse_ab` | den zuletzt begonnenen Bon zurückholen |
+| `datei_lesen` · `datei_schreiben` | Konfiguration und TSE-Zustand |
+| `anwendungsverzeichnis` | wo die Anwendung liegt |
 
 **Keine Fachlogik in Rust.** Steuer- und Rundungslogik darf es nur einmal
 geben; sie liegt in `@bonbon/core` und läuft unverändert im Client und im

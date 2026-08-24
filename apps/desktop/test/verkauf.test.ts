@@ -37,10 +37,10 @@ describe('Ein Verkauf laeuft durch', () => {
   it('Artikel tippen, zahlen, signieren, schreiben, drucken', async () => {
     const { kasse, drucker, log } = baueKasse()
 
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('CAPPUCCINO')
-    kasse.tippeArtikel('KAESEKUCHEN')
-    const bon = kasse.tippeArtikel('CAPPUCCINO') // zweiter Tipp erhoeht die Menge
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('CAPPUCCINO')
+    await kasse.tippeArtikel('KAESEKUCHEN')
+    const bon = await kasse.tippeArtikel('CAPPUCCINO') // zweiter Tipp erhoeht die Menge
 
     expect(aktiveZeilen(bon)).toHaveLength(2)
     expect(aktiveZeilen(bon).find((z) => z.artikelId === 'CAPPUCCINO')?.menge).toBe(2)
@@ -65,8 +65,8 @@ describe('Ein Verkauf laeuft durch', () => {
 
   it('schreibt jedes Ereignis in den Event Log, mit lueckenloser Kette', async () => {
     const { kasse, log } = baueKasse()
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('KAFFEE')
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('KAFFEE')
     await kasse.schliesseAb('bar', cents(300))
 
     const seqs = log.ereignisse.map((e) => e.seq)
@@ -86,14 +86,14 @@ describe('Ein Verkauf laeuft durch', () => {
 describe('Der Verzehrart-Umschalter', () => {
   it('aendert den Steuersatz, nicht den Preis', async () => {
     const { kasse } = baueKasse()
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('KAESEKUCHEN')
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('KAESEKUCHEN')
 
     const imHaus = kasse.bon
     expect(imHaus?.zeilen[0]?.steuersatzPromille).toBe(STEUERSATZ.regel)
     const summeVorher = gesamtbetrag(imHaus as never)
 
-    const ausserHaus = kasse.setzeVerzehrart('ausser-haus')
+    const ausserHaus = await kasse.setzeVerzehrart('ausser-haus')
     expect(ausserHaus.zeilen[0]?.steuersatzPromille).toBe(STEUERSATZ.ermaessigt)
     expect(gesamtbetrag(ausserHaus)).toBe(summeVorher)
 
@@ -101,12 +101,12 @@ describe('Der Verzehrart-Umschalter', () => {
     expect(ergebnis.beleg.steuerausweis[0]?.steuersatzPromille).toBe(STEUERSATZ.ermaessigt)
   })
 
-  it('laesst Getraenke beim Regelsatz — die Regel kennt den Unterschied', () => {
+  it('laesst Getraenke beim Regelsatz — die Regel kennt den Unterschied', async () => {
     const { kasse } = baueKasse()
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('KAFFEE') // Getraenk
-    kasse.tippeArtikel('KAESEKUCHEN') // Speise
-    const bon = kasse.setzeVerzehrart('ausser-haus')
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('KAFFEE') // Getraenk
+    await kasse.tippeArtikel('KAESEKUCHEN') // Speise
+    const bon = await kasse.setzeVerzehrart('ausser-haus')
 
     const kaffee = aktiveZeilen(bon).find((z) => z.artikelId === 'KAFFEE')
     const kuchen = aktiveZeilen(bon).find((z) => z.artikelId === 'KAESEKUCHEN')
@@ -116,13 +116,21 @@ describe('Der Verzehrart-Umschalter', () => {
 
   it('ist jederzeit vor dem Abschluss moeglich, danach nicht mehr', async () => {
     const { kasse } = baueKasse()
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('KAESEKUCHEN')
-    kasse.setzeVerzehrart('ausser-haus')
-    kasse.setzeVerzehrart('im-haus')
-    kasse.setzeVerzehrart('ausser-haus')
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('KAESEKUCHEN')
+    await kasse.setzeVerzehrart('ausser-haus')
+    await kasse.setzeVerzehrart('im-haus')
+    await kasse.setzeVerzehrart('ausser-haus')
+    const abgeschlossen = kasse.bon
     await kasse.schliesseAb('bar', cents(400))
-    expect(() => kasse.setzeVerzehrart('im-haus')).toThrow()
+
+    // Danach nicht mehr: der Umschalter aendert den abgeschlossenen Bon nicht,
+    // sondern eroeffnet den naechsten. Das ist derselbe Griff wie an einer
+    // echten Kasse — der Bon ist weg, der naechste Kunde steht schon da.
+    const naechster = await kasse.setzeVerzehrart('im-haus')
+    expect(naechster.saleId).not.toBe(abgeschlossen?.saleId)
+    expect(naechster.zustand).toBe('offen')
+    expect(naechster.zeilen).toHaveLength(0)
   })
 })
 
@@ -131,8 +139,8 @@ describe('TSE-Ausfall — Regel 8', () => {
     const { kasse, tse, drucker } = baueKasse()
     tse.setFehler({ art: 'ausgefallen', grund: 'TSE-Stick nicht erkannt' })
 
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('CAPPUCCINO')
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('CAPPUCCINO')
     const ergebnis = await kasse.schliesseAb('bar', cents(400))
 
     // Der Verkauf wird NICHT verweigert.
@@ -173,8 +181,8 @@ describe('Druckerausfall', () => {
       () => undefined,
     )
 
-    kasse2.beginneBon('im-haus')
-    kasse2.tippeArtikel('KAFFEE')
+    await kasse2.beginneBon('im-haus')
+    await kasse2.tippeArtikel('KAFFEE')
     const ergebnis = await kasse2.schliesseAb('bar', cents(300))
 
     expect(ergebnis.gedruckt).toBe(false)
@@ -234,9 +242,9 @@ describe('Steuersatzregel der Stammdaten', () => {
 describe('Der gedruckte Bon', () => {
   it('passt in 48 Zeichen und zeigt beide Steuersaetze', async () => {
     const { kasse, drucker } = baueKasse()
-    kasse.beginneBon('ausser-haus')
-    kasse.tippeArtikel('KAESEKUCHEN') // 7 % ausser Haus
-    kasse.tippeArtikel('KAFFEE') // 19 % immer
+    await kasse.beginneBon('ausser-haus')
+    await kasse.tippeArtikel('KAESEKUCHEN') // 7 % ausser Haus
+    await kasse.tippeArtikel('KAFFEE') // 19 % immer
     await kasse.schliesseAb('bar', cents(1000))
 
     for (const zeile of drucker.letzterBon) {
@@ -250,8 +258,8 @@ describe('Der gedruckte Bon', () => {
 
   it('erzeugt gueltige ESC/POS-Bytes', async () => {
     const { kasse, drucker } = baueKasse()
-    kasse.beginneBon('im-haus')
-    kasse.tippeArtikel('TEE')
+    await kasse.beginneBon('im-haus')
+    await kasse.tippeArtikel('TEE')
     await kasse.schliesseAb('bar', cents(250))
     // Der Vorschaudrucker haelt die Zeilen, der Parser kam damit klar.
     expect(previewLines(new Uint8Array(0), 48)).toEqual([])

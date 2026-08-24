@@ -347,6 +347,50 @@ Der Steuersatz wird dabei über die `Steuersatzregel` neu bestimmt — eine Funk
 Kein veränderbares Objekt. Ein Storno setzt ein Kennzeichen, die Zeile bleibt stehen (Regel 1). Es gibt bewusst **kein** Ereignis „Menge geändert": Eine Mengenänderung ist ein Storno plus eine neue Zeile, die über `ersetzt` auf die alte verweist. Bei einer Prüfung ist das der aussagekräftigere Verlauf.
 
 Die Verzehrart wird je Position mit ihrer **Herkunft** festgehalten (`bon` oder `position`) — nicht nur das Ergebnis, sondern die Entscheidung (Regel 4).
+
+### 19. Die Belegnummer läuft fort und wiederholt sich nie
+
+Sie wird **beim Öffnen des Bons** vergeben, kommt aus dem Event Log und ist über Neustarts, Abstürze und verworfene Bons hinweg fortlaufend. Zweimal dieselbe Nummer ist nachträglich nicht zu reparieren.
+
+Der Log ist dabei die einzige Quelle. Kein Zähler im Arbeitsspeicher, keine eigene Zählerdatei — eine zweite Quelle kann vom Log abweichen, und dann ist unklar, welche gilt.
+
+**Auch eine Zählung ist keine zulässige Quelle.** „Anzahl der `SaleStarted`-Ereignisse plus eins" stimmt nur, solange jeder begonnene Bon auch abgeschlossen wird. Sobald ein Bon verworfen, geparkt oder von einem Absturz unterbrochen wird, vergibt sie eine Nummer ein zweites Mal. Gelesen wird deshalb die **zuletzt tatsächlich vergebene** Nummer aus dem letzten `SaleStarted`.
+
+Eine einmal vergebene Nummer ist verbraucht, auch wenn der Bon nie ein Beleg wurde. Ein verworfener Bon hinterlässt `SaleCancelled` mit Grund und behält seine Nummer.
+
+Gefunden im M2-Beweislauf, und nur dort zu finden: `bonNummer` lebte im Arbeitsspeicher und stand nach jedem Start wieder auf 0. Der zweite Verkauf nach einem Neustart bekam wieder `…-00001`, kollidierte im Primärschlüssel des Event Logs und brach ab — **nachdem die TSE bereits signiert hatte**. Die Kasse hatte den Vorgang gebucht, der Kunde hätte gezahlt, und kein Beleg wäre gekommen. In den kopflosen Tests konnte das nicht auffallen: dort lebt jede Kasse nur für die Dauer eines Tests.
+
+### Ereignisse werden geschrieben, wenn sie passieren
+
+`SaleStarted` beim Öffnen des Bons, `LineAdded` beim Antippen, `DiningModeChanged` beim Umschalten — jeweils sofort, nicht beim Abschluss. Ein Log, der erst am Ende schreibt, ist kein append-only-Log: bis dahin liegt der ganze Vorgang im Arbeitsspeicher, und ein Absturz nimmt ihn spurlos mit.
+
+Der Preis ist gemessen und tragbar: im M0-Lasttest kosteten einzeln geschriebene Ereignisse unter Stoßlast **p99 1,4 ms**.
+
+**Erst schreiben, dann übernehmen.** Scheitert das Schreiben, hat auch der Bon das Ereignis nicht. Sonst zeigte die Kasse eine Position, die nirgends steht.
+
+**Der Log kommt vor der Signatur.** Stürzt die Kasse dazwischen ab, sagt der Log „abgeschlossen", während die TSE-Transaktion noch offen steht — das ist beim nächsten Start reparierbar. Umgekehrt stünde ein signierter, ausgegebener Vorgang im Log als abgebrochen, und das ist es nicht.
+
+### Eine begonnene TSE-Transaktion muss aufgelöst werden
+
+Die Transaktion wird beim **Bonbeginn** geöffnet, nicht beim Abschluss — die KassenSichV verlangt die Protokollierung mit Beginn des Aufzeichnungsvorgangs. Daraus folgt ein Zustand, den es vorher nicht gab: eine Transaktion, die begonnen wurde und nie endete.
+
+Beim Start der Kasse wird die TSE deshalb nach offenen Transaktionen gefragt (fiskaltrust: Zero-Receipt `0x4445000000000002`, dessen Antwort `CurrentStartedTransactionNumbers` trägt). Jede wird gegen den Event Log abgeglichen:
+
+| Log | Was passiert |
+|---|---|
+| Bon vollständig (`SaleFinished` steht drin) | Transaktion abschließen — der Vorgang hat stattgefunden |
+| sonst | Transaktion als abgebrochen beenden (Fail-Transaction `0x444500000000000B`) |
+
+**Der Vorgang wird protokolliert, nicht stillschweigend bereinigt** — er geht als eigenes Ereignis in den Log. Eine offene Transaktion klammheimlich zu schließen wäre die stille Änderung aus Regel 1.
+
+Antwortet die TSE beim Start nicht, wird die Kasse **nicht** gesperrt (Regel 8). Der Abgleich wird beim nächsten Start nachgeholt, und der Aufschub wird gemeldet.
+
+### Mocks führen ihren Zustand fort
+
+Ein Mock, der bei Transaktionsnummer 1 wieder anfängt und offene Transaktionen vergisst, verdeckt genau die Fehler, die im Laden auffallen. Eine echte TSE ist ein Gerät, kein Prozess: sie vergisst beim Neustart der Kasse nichts. Transaktionsnummer, Signaturzähler und offene Transaktionen überdauern deshalb auch beim `MockTse` einen Neustart.
+
+Das ist dieselbe Regel wie „jeder Mock muss kaputtgehen können", nur andersherum: ein Mock, der bequemer ist als das echte Gerät, testet den falschen Fall.
+
 ---
 
 ## Struktur

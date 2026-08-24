@@ -21,7 +21,7 @@
  *   node werkzeuge/verkauf-im-fenster.mjs [pfad-zur-exe]
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -207,8 +207,57 @@ const VERKAUF = `(async () => {
   }
 })()`
 
+/**
+ * Beendet die Anwendung samt Kindprozessen.
+ *
+ * `kill()` allein genuegt unter Windows nicht: WebView2 laeuft in eigenen
+ * Prozessen, und der Hauptprozess ueberlebt das Signal regelmaessig. Beim
+ * naechsten Lauf haengt dann eine alte Instanz auf dem Debug-Port, und der
+ * naechste Bau kann die Exe nicht ersetzen — genau so ist dieser Lauf einmal
+ * gescheitert.
+ */
+function beende(anwendung) {
+  anwendung.kill()
+  if (process.platform !== 'win32' || anwendung.pid === undefined) return
+  try {
+    // /T nimmt den Prozessbaum mit, /F erzwingt es.
+    spawnSync('taskkill', ['/pid', String(anwendung.pid), '/T', '/F'], { stdio: 'ignore' })
+  } catch {
+    // Schon weg. Kein Grund, den Lauf daran scheitern zu lassen.
+  }
+}
+
+/**
+ * Nur den Bon oeffnen — fuer den Absturzfall.
+ *
+ * Danach wird die Anwendung hart beendet. Zurueck bleibt: ein `SaleStarted` im
+ * Log ohne Abschluss und eine TSE-Transaktion, die offen steht. Genau der
+ * Zustand, den der Abgleich beim naechsten Start aufloesen muss.
+ */
+const BON_OEFFNEN = `(async () => {
+  const warte = (ms) => new Promise((r) => setTimeout(r, ms))
+  const suche = (auswahl, text) =>
+    [...document.querySelectorAll(auswahl)].find((e) => e.textContent.includes(text))
+
+  const kachel = suche('.artikel-kachel', 'Cappuccino')
+  if (!kachel) throw new Error('Artikel nicht gefunden')
+  kachel.click()
+  await warte(600)
+
+  return {
+    protokoll: ['Bon geoeffnet, eine Position getippt'],
+    abschluss: document.querySelector('.summe')?.textContent ?? '(keine Summe)',
+    fehler: document.querySelector('.fehler')?.textContent ?? null,
+    darstellung: {},
+    fuss: (document.querySelector('.fuss')?.textContent ?? '').slice(0, 4000),
+  }
+})()`
+
 async function main() {
-  const exe = process.argv[2] ? resolve(process.argv[2]) : STANDARD_EXE
+  const argumente = process.argv.slice(2)
+  const absturz = argumente.includes('--absturz')
+  const pfad = argumente.find((a) => !a.startsWith('--'))
+  const exe = pfad ? resolve(pfad) : STANDARD_EXE
   if (!existsSync(exe)) {
     console.error(`Die Anwendung fehlt: ${exe}`)
     console.error('Erst bauen: cd apps/desktop && pnpm exec tauri build')
@@ -242,7 +291,7 @@ async function main() {
       await warte(100)
     }
 
-    const ergebnis = await steuerung.werteAus(VERKAUF)
+    const ergebnis = await steuerung.werteAus(absturz ? BON_OEFFNEN : VERKAUF)
 
     console.log('\n--- Verkauf ---')
     for (const zeile of ergebnis.protokoll) console.log('  ' + zeile)
@@ -263,7 +312,7 @@ async function main() {
     code = 1
   } finally {
     steuerung?.schliesse()
-    anwendung.kill()
+    beende(anwendung)
   }
   process.exit(code)
 }

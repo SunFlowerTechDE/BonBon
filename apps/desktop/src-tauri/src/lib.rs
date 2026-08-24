@@ -130,6 +130,20 @@ fn hash_eingabe(prev_hash: &str, e: &VerkettetesEreignis) -> String {
         .join("|")
 }
 
+/// Eine Zeile aus `sale_events` in ein Ereignis.
+fn lies_ereignis(z: &rusqlite::Row<'_>) -> rusqlite::Result<VerkettetesEreignis> {
+    Ok(VerkettetesEreignis {
+        id: z.get(0)?,
+        device_id: z.get(1)?,
+        seq: z.get(2)?,
+        occurred_at: z.get(3)?,
+        typ: z.get(4)?,
+        payload: z.get(5)?,
+        prev_hash: z.get(6)?,
+        hash: z.get(7)?,
+    })
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn eventlog_anhaengen(
@@ -186,23 +200,63 @@ fn eventlog_anhaengen(
     Ok(ereignis)
 }
 
-/// Zaehlt die Ereignisse eines Geraets mit einem bestimmten Typ.
+/// Das zuletzt geschriebene Ereignis eines Typs.
 ///
-/// Bewusst nur eine Zaehlung, keine Auswertung: **was** die Zahl bedeutet,
-/// entscheidet die TypeScript-Seite. Sie liest daraus, wie viele Bons dieses
-/// Geraet schon geschrieben hat, und fuehrt die Belegnummer dort fort. Wuerde
-/// Rust das selbst herleiten, laege ein Stueck Fachlogik ein zweites Mal vor
-/// (CLAUDE.md, Stack).
+/// Die Kasse liest daraus beim Start die zuletzt vergebene Belegnummer: das
+/// letzte `SaleStarted` traegt sie im Payload. Rust gibt nur die Zeile zurueck
+/// und deutet nichts — welche Bedeutung im Payload steckt, weiss allein die
+/// TypeScript-Seite (CLAUDE.md, Stack).
+///
+/// Vorher stand hier eine Zaehlung der `SaleStarted`-Ereignisse. Die stimmte
+/// nur, solange jeder begonnene Bon auch abgeschlossen wurde — ein verworfener
+/// oder geparkter Bon haette seine Nummer ein zweites Mal vergeben lassen.
 #[tauri::command]
-fn eventlog_anzahl_typ(pfad: String, device_id: String, r#type: String) -> Result<i64, String> {
+fn eventlog_letztes_ereignis(
+    pfad: String,
+    device_id: String,
+    r#type: String,
+) -> Result<Option<VerkettetesEreignis>, String> {
     let verbindung = oeffne(&pfad)?;
-    verbindung
-        .query_row(
-            "SELECT COUNT(*) FROM sale_events WHERE device_id = ?1 AND type = ?2",
-            rusqlite::params![device_id, r#type],
-            |z| z.get(0),
+    let ergebnis = verbindung.query_row(
+        "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash
+           FROM sale_events
+          WHERE device_id = ?1 AND type = ?2
+          ORDER BY seq DESC LIMIT 1",
+        rusqlite::params![device_id, r#type],
+        lies_ereignis,
+    );
+    match ergebnis {
+        Ok(e) => Ok(Some(e)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(format!("Letztes Ereignis nicht lesbar: {e}")),
+    }
+}
+
+/// Alle Ereignisse eines Geraets ab einer Sequenznummer, aufsteigend.
+///
+/// Damit holt sich die Kasse beim Start den zuletzt begonnenen Bon zurueck und
+/// sieht, ob er je abgeschlossen wurde.
+#[tauri::command]
+fn eventlog_ereignisse_ab(
+    pfad: String,
+    device_id: String,
+    ab_seq: i64,
+) -> Result<Vec<VerkettetesEreignis>, String> {
+    let verbindung = oeffne(&pfad)?;
+    let mut abfrage = verbindung
+        .prepare(
+            "SELECT id, device_id, seq, occurred_at, type, payload, prev_hash, hash
+               FROM sale_events
+              WHERE device_id = ?1 AND seq >= ?2
+              ORDER BY seq",
         )
-        .map_err(|e| format!("Zaehlen nach Typ fehlgeschlagen: {e}"))
+        .map_err(|e| format!("Abfrage nicht vorbereitbar: {e}"))?;
+    let zeilen = abfrage
+        .query_map(rusqlite::params![device_id, ab_seq], lies_ereignis)
+        .map_err(|e| format!("Abfrage fehlgeschlagen: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Zeilen nicht lesbar: {e}"))?;
+    Ok(zeilen)
 }
 
 #[tauri::command]
@@ -211,6 +265,49 @@ fn eventlog_anzahl(pfad: String) -> Result<i64, String> {
     verbindung
         .query_row("SELECT COUNT(*) FROM sale_events", [], |z| z.get(0))
         .map_err(|e| format!("Zählen fehlgeschlagen: {e}"))
+}
+
+// --- Dateien ---------------------------------------------------------------
+
+/// Liest eine Textdatei. `None`, wenn sie nicht da ist.
+///
+/// Der Unterschied ist wichtig: „gibt es nicht" ist ein normaler Zustand — die
+/// Konfiguration ist eben noch nicht angelegt. „Gibt es, aber ich komme nicht
+/// heran" ist ein Fehler und wird als solcher gemeldet. Beides in `None`
+/// zusammenzuwerfen hiesse, eine unlesbare Datei als „nicht vorhanden"
+/// durchzuwinken, und die Kasse liefe still mit den Vorgaben weiter.
+#[tauri::command]
+fn datei_lesen(pfad: String) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(&pfad) {
+        Ok(inhalt) => Ok(Some(inhalt)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Datei {pfad} nicht lesbar: {e}")),
+    }
+}
+
+/// Schreibt eine Textdatei — vollstaendig oder gar nicht.
+///
+/// Erst in eine Nebendatei, dann umbenennen. Ein Absturz mitten im Schreiben
+/// hinterlaesst sonst eine halbe Datei, und beim naechsten Start faellt die
+/// Kasse auf die Vorgaben zurueck, ohne dass jemand weiss, warum.
+#[tauri::command]
+fn datei_schreiben(pfad: String, inhalt: String) -> Result<(), String> {
+    let neben = format!("{pfad}.neu");
+    std::fs::write(&neben, inhalt).map_err(|e| format!("Datei {neben} nicht schreibbar: {e}"))?;
+    std::fs::rename(&neben, &pfad).map_err(|e| format!("Umbenennen nach {pfad} fehlgeschlagen: {e}"))
+}
+
+/// Das Verzeichnis, in dem die Anwendung liegt.
+///
+/// Dorthin gehoert die Konfiguration: jeder Laden hat eine andere Drucker-IP,
+/// und im Anwendungsbuendel waere die Datei nur mit einem neuen Bau zu aendern.
+#[tauri::command]
+fn anwendungsverzeichnis() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {e}"))?;
+    let ordner = exe
+        .parent()
+        .ok_or_else(|| "Die Anwendung liegt in keinem Verzeichnis".to_string())?;
+    Ok(ordner.display().to_string())
 }
 
 // --- Start -----------------------------------------------------------------
@@ -228,7 +325,11 @@ macro_rules! befehle {
             tcp_erreichbar,
             eventlog_anhaengen,
             eventlog_anzahl,
-            eventlog_anzahl_typ
+            eventlog_letztes_ereignis,
+            eventlog_ereignisse_ab,
+            datei_lesen,
+            datei_schreiben,
+            anwendungsverzeichnis
         ]
     };
 }

@@ -119,11 +119,23 @@ export {
 
 export {
   TseError,
+  type Abbruchanfrage,
+  type Abbruchergebnis,
+  type OffeneTransaktion,
   type Signieranfrage,
   type Signierergebnis,
+  type Transaktionsbeginn,
+  type Transaktionsergebnis,
   type TsePort,
   type TseStatus,
   type TseZustand,
 } from './tse/TsePort.js'
 
-export { MockTse, type MockTseFehler, type MockTseOptions } from './tse/MockTse.js'
+export {
+  MockTse,
+  MockTseSpeicherImRam,
+  type MockTseFehler,
+  type MockTseGespeichert,
+  type MockTseOptions,
+  type MockTseSpeicher,
+} from './tse/MockTse.js'

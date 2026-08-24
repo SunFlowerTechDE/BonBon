@@ -384,17 +384,18 @@ fn eventlog_schreibt_nach_sqlite_und_setzt_die_kette_nach_neustart_fort() {
     );
 }
 
-/// `eventlog_anzahl_typ` zaehlt nur den gefragten Typ und nur das gefragte Geraet.
+/// Die Belegnummer kommt aus dem Log, nicht aus einer Zaehlung.
 ///
-/// Daran haengt die Belegnummer nach einem Neustart: die Kasse liest hier ab,
-/// wie viele Bons dieses Geraet schon geschrieben hat. Zaehlt der Befehl zu
-/// viel oder zu wenig, springt oder wiederholt sich die Belegnummer.
+/// `eventlog_letztes_ereignis` liefert das zuletzt geschriebene `SaleStarted`
+/// des Geraets — daraus liest die Kasse die zuletzt vergebene Nummer. Eine
+/// Zaehlung stimmte nur, solange jeder begonnene Bon auch abgeschlossen wurde;
+/// ein verworfener Bon haette seine Nummer ein zweites Mal vergeben lassen.
 #[test]
-fn eventlog_anzahl_typ_trennt_typ_und_geraet() {
-    let pfad = frischer_datenbankpfad("typzaehlung");
+fn letztes_ereignis_findet_den_zuletzt_begonnenen_bon() {
+    let pfad = frischer_datenbankpfad("letztes");
     let (_app, webview) = kasse();
 
-    let schreibe = |typ: &str, geraet: &str, nummer: i64| {
+    let schreibe = |typ: &str, geraet: &str, nummer: i64, nutzlast: &str| {
         let _: VerkettetesEreignis = rufe(
             &webview,
             "eventlog_anhaengen",
@@ -402,7 +403,7 @@ fn eventlog_anzahl_typ_trennt_typ_und_geraet() {
                 "pfad": pfad,
                 "deviceId": geraet,
                 "type": typ,
-                "payload": "{}",
+                "payload": nutzlast,
                 "occurredAt": format!("2026-08-24T10:{nummer:02}:00.000Z"),
                 "id": format!("{geraet}-{typ}-{nummer}"),
             }),
@@ -410,24 +411,105 @@ fn eventlog_anzahl_typ_trennt_typ_und_geraet() {
         .unwrap_or_else(|f| panic!("eventlog_anhaengen fehlgeschlagen: {f}"));
     };
 
-    schreibe("SaleStarted", "KASSE-A", 1);
-    schreibe("LineAdded", "KASSE-A", 2);
-    schreibe("SaleStarted", "KASSE-A", 3);
-    schreibe("SaleStarted", "KASSE-B", 4);
-
-    let zaehle = |geraet: &str, typ: &str| -> i64 {
+    let letztes = |geraet: &str, typ: &str| -> Option<VerkettetesEreignis> {
         rufe(
             &webview,
-            "eventlog_anzahl_typ",
+            "eventlog_letztes_ereignis",
             serde_json::json!({ "pfad": pfad, "deviceId": geraet, "type": typ }),
         )
-        .unwrap_or_else(|f| panic!("eventlog_anzahl_typ fehlgeschlagen: {f}"))
+        .unwrap_or_else(|f| panic!("eventlog_letztes_ereignis fehlgeschlagen: {f}"))
     };
 
-    assert_eq!(zaehle("KASSE-A", "SaleStarted"), 2, "Typ oder Geraet nicht getrennt");
-    assert_eq!(zaehle("KASSE-B", "SaleStarted"), 1, "Fremdes Geraet mitgezaehlt");
-    assert_eq!(zaehle("KASSE-A", "LineAdded"), 1);
-    assert_eq!(zaehle("KASSE-A", "GibtEsNicht"), 0);
+    assert!(
+        letztes("KASSE-A", "SaleStarted").is_none(),
+        "Ohne Ereignisse darf nichts gefunden werden"
+    );
+
+    schreibe("SaleStarted", "KASSE-A", 1, r#"{"saleId":"K-00001"}"#);
+    schreibe("LineAdded", "KASSE-A", 2, "{}");
+    schreibe("SaleStarted", "KASSE-A", 3, r#"{"saleId":"K-00002"}"#);
+    schreibe("SaleStarted", "KASSE-B", 4, r#"{"saleId":"X-00009"}"#);
+
+    let a = letztes("KASSE-A", "SaleStarted").expect("SaleStarted fehlt");
+    assert_eq!(a.payload, r#"{"saleId":"K-00002"}"#, "Nicht das letzte gefunden");
+    assert_eq!(a.seq, 3);
+
+    let b = letztes("KASSE-B", "SaleStarted").expect("SaleStarted fehlt");
+    assert_eq!(
+        b.payload, r#"{"saleId":"X-00009"}"#,
+        "Fremdes Geraet nicht getrennt"
+    );
+
+    // Und der Bon selbst, ab seiner eigenen Sequenznummer.
+    let bon: Vec<VerkettetesEreignis> = rufe(
+        &webview,
+        "eventlog_ereignisse_ab",
+        serde_json::json!({ "pfad": pfad, "deviceId": "KASSE-A", "abSeq": a.seq }),
+    )
+    .unwrap_or_else(|f| panic!("eventlog_ereignisse_ab fehlgeschlagen: {f}"));
+    assert_eq!(
+        bon.iter().map(|e| e.typ.as_str()).collect::<Vec<_>>(),
+        vec!["SaleStarted"],
+        "Der zuletzt begonnene Bon hat genau ein Ereignis"
+    );
+}
+
+/// Dateien: fehlend, vorhanden, unlesbar sind drei verschiedene Antworten.
+#[test]
+fn datei_lesen_trennt_fehlend_von_fehlerhaft() {
+    let ordner = std::env::temp_dir().join(format!("bonbon-datei-{}", std::process::id()));
+    std::fs::create_dir_all(&ordner).expect("Ordner");
+    let datei = ordner.join("konfiguration.json").display().to_string();
+    let _ = std::fs::remove_file(&datei);
+
+    let (_app, webview) = kasse();
+
+    let gelesen: Option<String> = rufe(&webview, "datei_lesen", serde_json::json!({ "pfad": datei }))
+        .unwrap_or_else(|f| panic!("datei_lesen fehlgeschlagen: {f}"));
+    assert!(gelesen.is_none(), "Eine fehlende Datei ist kein Fehler");
+
+    rufe::<()>(
+        &webview,
+        "datei_schreiben",
+        serde_json::json!({ "pfad": datei, "inhalt": "{\"drucker\":\"tcp\"}" }),
+    )
+    .unwrap_or_else(|f| panic!("datei_schreiben fehlgeschlagen: {f}"));
+
+    let gelesen: Option<String> = rufe(&webview, "datei_lesen", serde_json::json!({ "pfad": datei }))
+        .unwrap_or_else(|f| panic!("datei_lesen fehlgeschlagen: {f}"));
+    assert_eq!(gelesen.as_deref(), Some("{\"drucker\":\"tcp\"}"));
+
+    // Ein Verzeichnis statt einer Datei: vorhanden, aber nicht lesbar. Das
+    // muss ein Fehler sein und darf nicht als „nicht da" durchgehen.
+    let als_datei: Result<Option<String>, _> = rufe(
+        &webview,
+        "datei_lesen",
+        serde_json::json!({ "pfad": ordner.display().to_string() }),
+    );
+    assert!(
+        als_datei.is_err(),
+        "Ein Verzeichnis wurde als fehlende Datei gemeldet"
+    );
+
+    // Und das Schreiben ist vollstaendig oder gar nicht — die Nebendatei
+    // bleibt nicht liegen.
+    assert!(
+        !std::path::Path::new(&format!("{datei}.neu")).exists(),
+        "Die Nebendatei des Schreibvorgangs blieb liegen"
+    );
+}
+
+/// Das Anwendungsverzeichnis ist da und enthaelt die laufende Datei.
+#[test]
+fn anwendungsverzeichnis_zeigt_auf_die_laufende_datei() {
+    let (_app, webview) = kasse();
+    let ordner: String = rufe(&webview, "anwendungsverzeichnis", serde_json::json!({}))
+        .unwrap_or_else(|f| panic!("anwendungsverzeichnis fehlgeschlagen: {f}"));
+    let eigener = std::env::current_exe().expect("eigener Pfad");
+    assert_eq!(
+        std::path::Path::new(&ordner),
+        eigener.parent().expect("Elternverzeichnis")
+    );
 }
 
 /// Eine bereits vergebene id wird abgewiesen, nicht still ueberschrieben.

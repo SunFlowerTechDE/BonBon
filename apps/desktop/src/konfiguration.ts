@@ -12,6 +12,8 @@
 
 import type { Haendlerangaben } from '@bonbon/core'
 
+import type { DateiPort } from './adapter.js'
+
 export interface TseKonfiguration {
   readonly art: 'mock' | 'fiskaltrust'
   /** Nur bei `fiskaltrust`: Queue-URL aus dem Portal, `rest://` oder `http://`. */
@@ -75,44 +77,89 @@ export function laeuftInTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
+/** Der Dateiname neben der Anwendung. */
+export const KONFIGURATIONSDATEI = 'bonbon.config.json'
+
+/** Der Zustand der MockTse, ebenfalls neben der Anwendung. */
+export const TSE_ZUSTANDSDATEI = 'bonbon-tse-zustand.json'
+
 /**
- * Lädt die Konfiguration.
+ * Lädt die Konfiguration — aus der Datei **neben der Anwendung**.
  *
- * Im Tauri-Fenster aus `bonbon.config.json` neben der Anwendung, im Browser
- * aus `/bonbon.config.json`. Fehlt sie oder ist sie fehlerhaft, gilt die
- * Vorgabe — und das wird gemeldet, nicht verschwiegen.
+ * Vorher lag sie in `public/` und wurde beim Bauen ins Anwendungsbündel
+ * gepackt. Damit war sie nicht zu ändern, ohne neu zu bauen — für eine Kasse
+ * unbrauchbar: jeder Laden hat eine andere Drucker-IP, und niemand baut
+ * deswegen die Software neu.
+ *
+ * Fehlt die Datei, gilt die Vorgabe (Mock-TSE, Vorschaudrucker, Event Log im
+ * Speicher). Die Kasse startet damit ohne jede Peripherie **und sagt, wo sie
+ * die Datei erwartet hätte** — sonst sucht der Betreiber im Dunkeln.
+ *
+ * Ist die Datei da, aber unlesbar, ist das **ein Fehler und keine fehlende
+ * Datei**. Beides gleich zu behandeln hieße, eine kaputte Konfiguration
+ * stillschweigend durch die Vorgaben zu ersetzen: die Kasse liefe dann mit
+ * Vorschaudrucker weiter, obwohl ein echter eingerichtet war.
  */
 export async function ladeKonfiguration(
+  dateien: DateiPort,
   melde: (nachricht: string) => void,
 ): Promise<Konfiguration> {
+  const ordner = await dateien.anwendungsverzeichnis()
+  const pfad = ordner + PFADTRENNER + KONFIGURATIONSDATEI
+
+  let text: string | undefined
   try {
-    const antwort = await fetch('/bonbon.config.json', { cache: 'no-store' })
-    if (!antwort.ok) {
-      melde('Keine bonbon.config.json gefunden — es gelten die Vorgaben (Mock-TSE, Vorschaudrucker).')
-      return VORGABE
-    }
-    const gelesen = (await antwort.json()) as Partial<Konfiguration>
-    const zusammengefuehrt: Konfiguration = {
-      kasse: { ...VORGABE.kasse, ...gelesen.kasse },
-      haendler: { ...VORGABE.haendler, ...gelesen.haendler },
-      tse: { ...VORGABE.tse, ...gelesen.tse },
-      drucker: { ...VORGABE.drucker, ...gelesen.drucker },
-      eventLog: { ...VORGABE.eventLog, ...gelesen.eventLog },
-    }
-    melde(
-      'Konfiguration geladen: TSE ' +
-        zusammengefuehrt.tse.art +
-        ', Drucker ' +
-        zusammengefuehrt.drucker.art +
-        ', Event Log ' +
-        zusammengefuehrt.eventLog.art,
-    )
-    return zusammengefuehrt
+    text = await dateien.lies(pfad)
   } catch (fehler) {
+    // Da, aber nicht lesbar. Das wird gemeldet und nicht als „fehlt" behandelt.
     melde(
-      'Konfiguration nicht lesbar, es gelten die Vorgaben: ' +
-        (fehler instanceof Error ? fehler.message : String(fehler)),
+      'Die Konfiguration ' + pfad + ' ist nicht lesbar: ' +
+        (fehler instanceof Error ? fehler.message : String(fehler)) +
+        ' — es gelten die Vorgaben.',
     )
     return VORGABE
   }
+
+  if (text === undefined) {
+    melde(
+      'Keine ' + KONFIGURATIONSDATEI + ' in ' + ordner +
+        ' — es gelten die Vorgaben (Mock-TSE, Vorschaudrucker, Event Log im Speicher).',
+    )
+    return VORGABE
+  }
+
+  let gelesen: Partial<Konfiguration>
+  try {
+    gelesen = JSON.parse(text) as Partial<Konfiguration>
+  } catch (fehler) {
+    melde(
+      'Die Konfiguration ' + pfad + ' ist kein gueltiges JSON: ' +
+        (fehler instanceof Error ? fehler.message : String(fehler)) +
+        ' — es gelten die Vorgaben.',
+    )
+    return VORGABE
+  }
+
+  const zusammengefuehrt: Konfiguration = {
+    kasse: { ...VORGABE.kasse, ...gelesen.kasse },
+    haendler: { ...VORGABE.haendler, ...gelesen.haendler },
+    tse: { ...VORGABE.tse, ...gelesen.tse },
+    drucker: { ...VORGABE.drucker, ...gelesen.drucker },
+    eventLog: { ...VORGABE.eventLog, ...gelesen.eventLog },
+  }
+  melde(
+    'Konfiguration aus ' + pfad + ': TSE ' + zusammengefuehrt.tse.art +
+      ', Drucker ' + zusammengefuehrt.drucker.art +
+      ', Event Log ' + zusammengefuehrt.eventLog.art,
+  )
+  return zusammengefuehrt
 }
+
+/**
+ * Pfadtrenner.
+ *
+ * Windows nimmt beides an, deshalb genuegt der Schraegstrich. Ihn hier
+ * festzuschreiben ist ehrlicher als `path.join` zu importieren — im Webview
+ * gibt es kein `node:path`.
+ */
+const PFADTRENNER = '/'

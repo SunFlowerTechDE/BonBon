@@ -82,6 +82,7 @@ export const FLAECHEN: readonly Flaeche[] = [
   { name: 'Hinweis', grund: 'pfirsich', schrift: 'text', zweck: 'Hervorhebung, Rueckgeld' },
   { name: 'Primaeraktion', grund: 'beere', schrift: 'weiss', zweck: 'Zahlen, Bar abschliessen' },
   { name: 'Warnung', grund: 'koralle', schrift: 'text', zweck: 'Fehlermeldung, Position loeschen' },
+  { name: 'Bon verwerfen', grund: 'koralle', schrift: 'text', zweck: 'Bon loeschen — keine Aktion, ein Abbruch' },
   { name: 'TSE bereit', grund: 'signalGut', schrift: 'weiss', zweck: 'Zustandsanzeige' },
   { name: 'TSE gestoert', grund: 'signalWarnung', schrift: 'weiss', zweck: 'Zustandsanzeige' },
   { name: 'TSE ausgefallen', grund: 'signalFehler', schrift: 'weiss', zweck: 'Zustandsanzeige' },

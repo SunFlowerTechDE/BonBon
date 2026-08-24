@@ -1,5 +1,12 @@
 {
   "kasse": { "deviceId": "KASSE-01", "seriennummer": "BONBON-DEV-001" },
+  "haendler": {
+    "name": "Café Sonnenblume",
+    "strasse": "Bäckerstraße 12",
+    "postleitzahl": "66111",
+    "ort": "Saarbrücken",
+    "steuernummer": "040/123/45678"
+  },
   "tse": { "art": "mock" },
   "drucker": { "art": "tcp", "host": "127.0.0.1", "port": 9100, "zeichenProZeile": 48, "kassenlade": true },
   "eventLog": { "art": "sqlite", "pfad": "bonbon-eventlog.db" }

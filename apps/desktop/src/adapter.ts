@@ -16,6 +16,8 @@ import {
   type PrinterPort,
   type PrintJob,
   MockTse,
+  type MockTseGespeichert,
+  type MockTseSpeicher,
   PrinterError,
   type TsePort,
   cashDrawerPulse,
@@ -23,7 +25,7 @@ import {
 } from '@bonbon/ports'
 
 import type { DruckerKonfiguration, EventLogKonfiguration, Konfiguration } from './konfiguration.js'
-import { laeuftInTauri } from './konfiguration.js'
+import { TSE_ZUSTANDSDATEI, laeuftInTauri } from './konfiguration.js'
 
 // --- Tauri-Aufruf ----------------------------------------------------------
 
@@ -32,6 +34,59 @@ type InvokeFn = <T>(befehl: string, argumente?: Record<string, unknown>) => Prom
 async function invoke<T>(befehl: string, argumente?: Record<string, unknown>): Promise<T> {
   const modul = (await import('@tauri-apps/api/core')) as { invoke: InvokeFn }
   return modul.invoke<T>(befehl, argumente)
+}
+
+// --- Dateien ---------------------------------------------------------------
+
+/**
+ * Dateizugriff — im Tauri-Fenster ueber den Rust-Teil, sonst gar nicht.
+ *
+ * `undefined` heisst „nicht da", ein geworfener Fehler heisst „da, aber nicht
+ * lesbar". Beides zusammenzuwerfen hiesse, eine kaputte Konfiguration als
+ * fehlende durchzuwinken — die Kasse liefe dann still mit den Vorgaben weiter.
+ */
+export interface DateiPort {
+  lies(pfad: string): Promise<string | undefined>
+  schreib(pfad: string, inhalt: string): Promise<void>
+  anwendungsverzeichnis(): Promise<string>
+}
+
+class TauriDateien implements DateiPort {
+  async lies(pfad: string): Promise<string | undefined> {
+    return (await invoke<string | null>('datei_lesen', { pfad })) ?? undefined
+  }
+
+  async schreib(pfad: string, inhalt: string): Promise<void> {
+    await invoke<void>('datei_schreiben', { pfad, inhalt })
+  }
+
+  async anwendungsverzeichnis(): Promise<string> {
+    return invoke<string>('anwendungsverzeichnis')
+  }
+}
+
+/** Dateien im Arbeitsspeicher — fuer den Browserbetrieb und fuer Tests. */
+export class SpeicherDateien implements DateiPort {
+  readonly inhalte = new Map<string, string>()
+
+  constructor(private readonly ordner = 'speicher://anwendung') {}
+
+  async lies(pfad: string): Promise<string | undefined> {
+    return Promise.resolve(this.inhalte.get(pfad))
+  }
+
+  async schreib(pfad: string, inhalt: string): Promise<void> {
+    this.inhalte.set(pfad, inhalt)
+    return Promise.resolve()
+  }
+
+  async anwendungsverzeichnis(): Promise<string> {
+    return Promise.resolve(this.ordner)
+  }
+}
+
+export function baueDateien(): DateiPort {
+  return laeuftInTauri() ? new TauriDateien() : new SpeicherDateien()
 }
 
 // --- Hasher ----------------------------------------------------------------
@@ -175,8 +230,71 @@ export function baueDrucker(
 
 // --- TSE -------------------------------------------------------------------
 
+/**
+ * Der Zustand der MockTse in einer Datei neben der Anwendung.
+ *
+ * Eine echte TSE ist ein Geraet und vergisst beim Neustart der Kasse nichts.
+ * Ein Mock, der bei Transaktion 1 wieder anfaengt, verdeckt genau die Fehler,
+ * die im Laden auffallen — wiederverwendete Transaktionsnummern und
+ * Transaktionen, die offen stehenbleiben.
+ */
+export class MockTseSpeicherInDatei implements MockTseSpeicher {
+  constructor(
+    private readonly dateien: DateiPort,
+    private readonly pfad: string,
+    private readonly onLog: (nachricht: string) => void,
+  ) {}
+
+  async laden(): Promise<MockTseGespeichert | undefined> {
+    const text = await this.dateien.lies(this.pfad)
+    if (text === undefined) return undefined
+    try {
+      return JSON.parse(text) as MockTseGespeichert
+    } catch (fehler) {
+      // Nicht stillschweigend bei 0 weitermachen: eine unlesbare Zustandsdatei
+      // wuerde Transaktionsnummern ein zweites Mal vergeben.
+      throw new Error(
+        'Der gespeicherte TSE-Zustand in ' + this.pfad + ' ist unlesbar: ' + String(fehler),
+      )
+    }
+  }
+
+  async sichern(zustand: MockTseGespeichert): Promise<void> {
+    try {
+      await this.dateien.schreib(this.pfad, JSON.stringify(zustand, null, 2))
+    } catch (fehler) {
+      this.onLog('TSE-Zustand nicht sicherbar: ' + String(fehler))
+      throw fehler
+    }
+  }
+}
+
+/**
+ * Der Speicher fuer den MockTse-Zustand, neben der Anwendung.
+ *
+ * Scheitert schon das Ermitteln des Verzeichnisses, laeuft der Mock fluechtig
+ * weiter — aber es wird gesagt. Ein Mock ohne Gedaechtnis ist besser als eine
+ * Kasse, die deswegen nicht startet; verschwiegen wird es trotzdem nicht.
+ */
+export async function baueTseSpeicher(
+  dateien: DateiPort,
+  onLog: (nachricht: string) => void,
+): Promise<MockTseSpeicher | undefined> {
+  try {
+    const ordner = await dateien.anwendungsverzeichnis()
+    return new MockTseSpeicherInDatei(dateien, ordner + '/' + TSE_ZUSTANDSDATEI, onLog)
+  } catch (fehler) {
+    onLog(
+      'TSE-Zustand wird nicht gesichert (' + String(fehler) + ') — Transaktionsnummern ' +
+        'beginnen nach einem Neustart wieder bei 1.',
+    )
+    return undefined
+  }
+}
+
 export function baueTse(
   konfiguration: Konfiguration,
+  speicher: MockTseSpeicher | undefined,
   onLog: (nachricht: string) => void,
 ): TsePort {
   if (konfiguration.tse.art === 'fiskaltrust') {
@@ -189,6 +307,7 @@ export function baueTse(
   }
   return new MockTse({
     seriennummer: 'MOCK-TSE-' + konfiguration.kasse.seriennummer,
+    ...(speicher === undefined ? {} : { speicher }),
     onLog,
   })
 }
@@ -201,13 +320,16 @@ export interface EventLogPort {
   anhaengen(deviceId: string, type: string, payload: string, occurredAt: string, id: string): Promise<ChainedEvent>
   anzahl(): Promise<number>
   /**
-   * Zaehlt die Ereignisse eines Geraets mit einem bestimmten Typ.
+   * Das zuletzt geschriebene Ereignis eines Typs.
    *
-   * Die Kasse liest daraus beim Start, wie viele Bons dieses Geraet schon
-   * geschrieben hat, und fuehrt die Belegnummer fort. Ohne diese Frage
-   * beginnt sie nach jedem Neustart wieder bei 1.
+   * Die Kasse liest daraus beim Start die zuletzt vergebene Belegnummer: das
+   * letzte `SaleStarted` traegt sie im Payload. Eine Zaehlung waere der
+   * fragilere Weg — sie stimmt nur, solange jeder begonnene Bon auch
+   * abgeschlossen wird.
    */
-  anzahlTyp(deviceId: string, type: string): Promise<number>
+  letztesEreignis(deviceId: string, type: string): Promise<ChainedEvent | undefined>
+  /** Alle Ereignisse ab einer Sequenznummer, aufsteigend. */
+  ereignisseAb(deviceId: string, abSeq: number): Promise<readonly ChainedEvent[]>
 }
 
 /** Event Log im Arbeitsspeicher — für den Entwicklungsbetrieb ohne Rust-Teil. */
@@ -246,10 +368,14 @@ export class SpeicherEventLog implements EventLogPort {
     return Promise.resolve(this.ereignisse.length)
   }
 
-  async anzahlTyp(deviceId: string, type: string): Promise<number> {
+  async letztesEreignis(deviceId: string, type: string): Promise<ChainedEvent | undefined> {
     return Promise.resolve(
-      this.ereignisse.filter((e) => e.deviceId === deviceId && e.type === type).length,
+      this.ereignisse.filter((e) => e.deviceId === deviceId && e.type === type).at(-1),
     )
+  }
+
+  async ereignisseAb(deviceId: string, abSeq: number): Promise<readonly ChainedEvent[]> {
+    return Promise.resolve(this.ereignisse.filter((e) => e.deviceId === deviceId && e.seq >= abSeq))
   }
 }
 
@@ -287,9 +413,38 @@ class TauriEventLog implements EventLogPort {
     return invoke<number>('eventlog_anzahl', { pfad: this.pfad })
   }
 
-  async anzahlTyp(deviceId: string, type: string): Promise<number> {
-    return invoke<number>('eventlog_anzahl_typ', { pfad: this.pfad, deviceId, type })
+  async letztesEreignis(deviceId: string, type: string): Promise<ChainedEvent | undefined> {
+    const gefunden = await invoke<ChainedEvent | null>('eventlog_letztes_ereignis', {
+      pfad: this.pfad,
+      deviceId,
+      type,
+    })
+    return gefunden ?? undefined
   }
+
+  async ereignisseAb(deviceId: string, abSeq: number): Promise<readonly ChainedEvent[]> {
+    return invoke<ChainedEvent[]>('eventlog_ereignisse_ab', {
+      pfad: this.pfad,
+      deviceId,
+      abSeq,
+    })
+  }
+}
+
+/**
+ * Loest einen relativen Event-Log-Pfad gegen das Anwendungsverzeichnis auf.
+ *
+ * Ein absoluter Pfad bleibt, wie er ist — wer die Datenbank bewusst woandershin
+ * legt, soll das koennen.
+ */
+export async function nebenDerAnwendung(
+  dateien: DateiPort,
+  konfiguration: EventLogKonfiguration,
+): Promise<EventLogKonfiguration> {
+  const pfad = konfiguration.pfad
+  if (pfad === undefined || /^([A-Za-z]:[\/]|[\/])/.test(pfad)) return konfiguration
+  const ordner = await dateien.anwendungsverzeichnis()
+  return { ...konfiguration, pfad: ordner + '/' + pfad }
 }
 
 export function baueEventLog(
